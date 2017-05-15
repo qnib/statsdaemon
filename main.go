@@ -23,7 +23,7 @@ func main() {
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:  "address",
-			Value: "8125",
+			Value: ":8125",
 			Usage: "UDP service address",
 		},
 		cli.StringFlag{
