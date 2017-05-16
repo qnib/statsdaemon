@@ -1,12 +1,9 @@
 package statsdaemon
 
 import (
-	//"bytes"
 	"math/rand"
 	"strconv"
-	//"sync"
 	"time"
-	//"net"
 	"bytes"
 	"flag"
 	"math"
@@ -34,12 +31,14 @@ func NewSet() *flag.FlagSet {
 	set.Int("persist-count-keys", 60, "doc")
 	return set
 }
+
 func NewGlobalSet() *flag.FlagSet {
 	globalSet := flag.NewFlagSet("test", 0)
 	return globalSet
 }
-func NewCtx(set, gset *flag.FlagSet) *cli.Context {
-	ctx := cli.NewContext(nil, set, gset)
+
+func NewCtx(fset *flag.FlagSet) *cli.Context {
+	ctx := cli.NewContext(nil, fset, nil)
 	return ctx
 }
 
@@ -48,7 +47,6 @@ func NewMP() MsgParser {
 		debug: false,
 	}
 }
-
 
 func TestParseLineGauge(t *testing.T) {
 
@@ -362,7 +360,7 @@ func TestMultiLine(t *testing.T) {
 func TestPacketHandlerReceiveCounter(t *testing.T) {
 	set := NewSet()
 	set.String("receive-counter", "countme", "doc")
-	ctx := NewCtx(set, NewGlobalSet())
+	ctx := NewCtx(set)
 	sd := NewStatsdaemon(ctx)
 
 	p := &Packet{
@@ -379,7 +377,7 @@ func TestPacketHandlerReceiveCounter(t *testing.T) {
 }
 
 func TestPacketHandlerCount(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 
 	p := &Packet{
@@ -405,7 +403,7 @@ func TestPacketHandlerCount(t *testing.T) {
 }
 
 func TestPacketHandlerGauge(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	p := &Packet{
 		Bucket:   "gaugor",
@@ -449,7 +447,7 @@ func TestPacketHandlerGauge(t *testing.T) {
 }
 
 func TestPacketHandlerTimer(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 
 	p := &Packet{
@@ -469,7 +467,7 @@ func TestPacketHandlerTimer(t *testing.T) {
 }
 
 func TestPacketHandlerSet(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	p := &Packet{
 		Bucket:   "uniques",
@@ -488,7 +486,7 @@ func TestPacketHandlerSet(t *testing.T) {
 }
 
 func TestProcessCounters(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 
 	var buffer bytes.Buffer
@@ -511,33 +509,11 @@ func TestProcessCounters(t *testing.T) {
 	assert.Equal(t, string(lines[0]), "gorets 123 1418052649")
 	assert.Equal(t, string(lines[sd.Ctx.Int("persist-count-keys")]), "gorets 0 1418052649")
 }
-/*
-func TestProcessTimers(t *testing.T) {
-	// Some data with expected mean of 20
-	timers = make(map[string]Float64Slice)
-	timers["response_time"] = []float64{0, 30, 30}
 
-	now := int64(1418052649)
-
-	var buffer bytes.Buffer
-	num := processTimers(&buffer, now, Percentiles{})
-
-	lines := bytes.Split(buffer.Bytes(), []byte("\n"))
-
-	assert.Equal(t, num, int64(1))
-	assert.Equal(t, string(lines[0]), "response_time.mean 20 1418052649")
-	assert.Equal(t, string(lines[1]), "response_time.upper 30 1418052649")
-	assert.Equal(t, string(lines[2]), "response_time.lower 0 1418052649")
-	assert.Equal(t, string(lines[3]), "response_time.count 3 1418052649")
-
-	num = processTimers(&buffer, now, Percentiles{})
-	assert.Equal(t, num, int64(0))
-}
-*/
 func TestProcessGauges(t *testing.T) {
 	set := NewSet()
 	set.Set("delete-gauges", "false")
-	ctx := NewCtx(set, NewGlobalSet())
+	ctx := NewCtx(set)
 	sd := NewStatsdaemon(ctx)
 	var buffer bytes.Buffer
 
@@ -572,7 +548,7 @@ func TestProcessGauges(t *testing.T) {
 }
 
 func TestProcessDeleteGauges(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	var buffer bytes.Buffer
 
@@ -597,7 +573,7 @@ func TestProcessDeleteGauges(t *testing.T) {
 }
 
 func TestProcessSets(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 
 	now := int64(1418052649)
@@ -621,11 +597,34 @@ func TestProcessSets(t *testing.T) {
 	num = sd.ProcessSets(&buffer, now)
 	assert.Equal(t, num, int64(0))
 }
-/*
-func TestProcessTimersUpperPercentile(t *testing.T) {
-	// Some data with expected 75% of 2
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+
+func TestProcessTimers(t *testing.T) {
+	// Some data with expected mean of 20
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
+	sd.Timers["response_time"] = []float64{0, 30, 30}
+
+	now := int64(1418052649)
+
+	var buffer bytes.Buffer
+	num := sd.ProcessTimers(&buffer, now, Percentiles{})
+
+	lines := bytes.Split(buffer.Bytes(), []byte("\n"))
+
+	assert.Equal(t, num, int64(1))
+	assert.Equal(t, string(lines[0]), "response_time.mean 20 1418052649")
+	assert.Equal(t, string(lines[1]), "response_time.upper 30 1418052649")
+	assert.Equal(t, string(lines[2]), "response_time.lower 0 1418052649")
+	assert.Equal(t, string(lines[3]), "response_time.count 3 1418052649")
+
+	num = sd.ProcessTimers(&buffer, now, Percentiles{})
+	assert.Equal(t, num, int64(0))
+}
+
+func TestProcessTimersUpperPercentile(t *testing.T) {
+	ctx := NewCtx(NewSet())
+	sd := NewStatsdaemon(ctx)
+	// Some data with expected 75% of 2
 	sd.Timers["response_time"] = []float64{0, 1, 2, 3}
 
 	now := int64(1418052649)
@@ -645,16 +644,17 @@ func TestProcessTimersUpperPercentile(t *testing.T) {
 }
 
 func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
-	flag.Set("postfix", ".test")
-	// Some data with expected 75% of 2
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	set := NewSet()
+	set.String("postfix", ".test", "doc")
+	ctx := NewCtx(set)
 	sd := NewStatsdaemon(ctx)
+	// Some data with expected 75% of 2
 	sd.Timers["postfix_response_time.test"] = []float64{0, 1, 2, 3}
 
 	now := int64(1418052649)
 
 	var buffer bytes.Buffer
-	num := processTimers(&buffer, now, Percentiles{
+	num := sd.ProcessTimers(&buffer, now, Percentiles{
 		&Percentile{
 			75,
 			"75",
@@ -667,15 +667,15 @@ func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
 	assert.Equal(t, string(lines[0]), "postfix_response_time.upper_75.test 2 1418052649")
 	flag.Set("postfix", "")
 }
-/*
+
 func TestProcessTimesLowerPercentile(t *testing.T) {
-	timers = make(map[string]Float64Slice)
-	timers["time"] = []float64{0, 1, 2, 3}
-
+	set := NewSet()
+	ctx := NewCtx(set)
+	sd := NewStatsdaemon(ctx)
+	sd.Timers["time"] = []float64{0, 1, 2, 3}
 	now := int64(1418052649)
-
 	var buffer bytes.Buffer
-	num := processTimers(&buffer, now, Percentiles{
+	num := sd.ProcessTimers(&buffer, now, Percentiles{
 		&Percentile{
 			-75,
 			"-75",
@@ -687,9 +687,10 @@ func TestProcessTimesLowerPercentile(t *testing.T) {
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, string(lines[0]), "time.lower_75 1 1418052649")
 }
+
 /*
 func TestMultipleUDPSends(t *testing.T) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	addr := "127.0.0.1:8126"
 
@@ -777,22 +778,26 @@ func BenchmarkManyDifferentSensors(t *testing.B) {
 	processGauges(&buff, now)
 }
 
+*/
+
 func BenchmarkOneBigTimer(t *testing.B) {
+	set := NewSet()
+	ctx := NewCtx(set)
+	sd := NewStatsdaemon(ctx)
 	r := rand.New(rand.NewSource(438))
 	bucket := "response_time"
 	for i := 0; i < 10000000; i++ {
 		a := float64(r.Uint32() % 1000)
-		timers[bucket] = append(timers[bucket], a)
+		sd.Timers[bucket] = append(sd.Timers[bucket], a)
 	}
 
 	var buff bytes.Buffer
 	t.ResetTimer()
-	processTimers(&buff, time.Now().Unix(), commonPercentiles)
+	sd.ProcessTimers(&buff, time.Now().Unix(), commonPercentiles)
 }
 
-*/
 func BenchmarkLotsOfTimers(t *testing.B) {
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	r := rand.New(rand.NewSource(438))
 	for i := 0; i < 1000; i++ {
@@ -808,7 +813,6 @@ func BenchmarkLotsOfTimers(t *testing.B) {
 	sd.ProcessTimers(&buff, time.Now().Unix(), commonPercentiles)
 }
 
-
 func BenchmarkParseLineCounter(b *testing.B) {
 	mp := NewMP()
 	d1 := []byte("a.key.with-0.dash:4|c|@0.5")
@@ -820,7 +824,6 @@ func BenchmarkParseLineCounter(b *testing.B) {
 	}
 }
 
-
 func BenchmarkParseLineGauge(b *testing.B) {
 	mp := NewMP()
 	d1 := []byte("gaugor.whatever:333.4|g")
@@ -831,6 +834,7 @@ func BenchmarkParseLineGauge(b *testing.B) {
 		mp.parseLine(d2)
 	}
 }
+
 func BenchmarkParseLineTimer(b *testing.B) {
 	mp := NewMP()
 	d1 := []byte("glork.some.keyspace:3.7211|ms")
@@ -841,6 +845,7 @@ func BenchmarkParseLineTimer(b *testing.B) {
 		mp.parseLine(d2)
 	}
 }
+
 func BenchmarkParseLineSet(b *testing.B) {
 	mp := NewMP()
 	d1 := []byte("setof.some.keyspace:hiya|s")
@@ -854,7 +859,7 @@ func BenchmarkParseLineSet(b *testing.B) {
 
 func BenchmarkPacketHandlerCounter(b *testing.B) {
 	mp := NewMP()
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	d1 := mp.parseLine([]byte("a.key.with-0.dash:4|c|@0.5"))
 	d2 := mp.parseLine([]byte("normal.key.space:1|c"))
@@ -864,9 +869,10 @@ func BenchmarkPacketHandlerCounter(b *testing.B) {
 		sd.packetHandler(d2)
 	}
 }
+
 func BenchmarkPacketHandlerGauge(b *testing.B) {
 	mp := NewMP()
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	d1 := mp.parseLine([]byte("gaugor.whatever:333.4|g"))
 	d2 := mp.parseLine([]byte("gaugor.whatever:-5|g"))
@@ -876,21 +882,23 @@ func BenchmarkPacketHandlerGauge(b *testing.B) {
 		sd.packetHandler(d2)
 	}
 }
-/*
+
 func BenchmarkPacketHandlerTimer(b *testing.B) {
-	d1 := parseLine([]byte("glork.some.keyspace:3.7211|ms"))
-	d2 := parseLine([]byte("glork.some.keyspace:11223|ms"))
-	timers = make(map[string]Float64Slice)
+	mp := NewMP()
+	ctx := NewCtx(NewSet())
+	sd := NewStatsdaemon(ctx)
+	d1 := mp.parseLine([]byte("glork.some.keyspace:3.7211|ms"))
+	d2 := mp.parseLine([]byte("glork.some.keyspace:11223|ms"))
 
 	for i := 0; i < b.N; i++ {
-		packetHandler(d1)
-		packetHandler(d2)
+		sd.packetHandler(d1)
+		sd.packetHandler(d2)
 	}
 }
-*/
+
 func BenchmarkPacketHandlerSet(b *testing.B) {
 	mp := NewMP()
-	ctx := NewCtx(NewSet(), NewGlobalSet())
+	ctx := NewCtx(NewSet())
 	sd := NewStatsdaemon(ctx)
 	d1 := mp.parseLine([]byte("setof.some.keyspace:hiya|s"))
 	d2 := mp.parseLine([]byte("setof.some.keyspace:411|s"))
