@@ -7,6 +7,7 @@ import (
 )
 
 type Percentiles []*Percentile
+
 type Percentile struct {
 	float float64
 	str   string
