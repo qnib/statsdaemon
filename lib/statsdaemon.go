@@ -231,14 +231,13 @@ func (sd *StatsDaemon) submit(deadline time.Time) (err error) {
 
 	client, err := net.Dial("tcp", graphiteAddress)
 	if err != nil {
-		/*if sd.Ctx.Bool("debug") {
+		if sd.Ctx.Bool("debug") {
 			log.Printf("WARNING: resetting counters when in debug mode")
-			processCounters(&buffer, now)
-			processGauges(&buffer, now)
-			//processTimers(&buffer, now, percentThreshold)
-			processSets(&buffer, now)
+			sd.ProcessCounters(&buffer, now)
+			sd.ProcessGauges(&buffer, now)
+			//sd.ProcessTimers(&buffer, now, percentThreshold)
+			sd.ProcessSets(&buffer, now)
 		}
-		*/
 		errmsg := fmt.Sprintf("dialing %s failed - %s", graphiteAddress, err)
 		return errors.New(errmsg)
 	}
@@ -305,7 +304,7 @@ func (sd *StatsDaemon) ProcessGauges(buffer *bytes.Buffer, now int64) int64 {
 	for bucket, currentValue := range sd.Gauges {
 		fmt.Fprintf(buffer, "%s %s %d\n", bucket, strconv.FormatFloat(currentValue, 'f', -1, 64), now)
 		num++
-		if sd.Ctx.Bool("delete-gauges") {
+		if ! sd.Ctx.Bool("resent-gauges") {
 			delete(sd.Gauges, bucket)
 		}
 	}

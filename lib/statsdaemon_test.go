@@ -27,7 +27,7 @@ func NewSet() *flag.FlagSet {
 	set := flag.NewFlagSet("test", 0)
 	set.String("address", ":8125", "doc")
 	set.Bool("debug", true, "doc")
-	set.Bool("delete-gauges", true, "doc")
+	set.Bool("resent-gauges", false, "doc")
 	set.Int("persist-count-keys", 60, "doc")
 	return set
 }
@@ -512,7 +512,7 @@ func TestProcessCounters(t *testing.T) {
 
 func TestProcessGauges(t *testing.T) {
 	set := NewSet()
-	set.Set("delete-gauges", "false")
+	set.Set("resent-gauges", "true")
 	ctx := NewCtx(set)
 	sd := NewStatsdaemon(ctx)
 	var buffer bytes.Buffer

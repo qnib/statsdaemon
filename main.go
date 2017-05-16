@@ -51,9 +51,8 @@ func main() {
 			Usage: "print statistics sent to graphite",
 		},
 		cli.BoolFlag{
-			Name:  "delete-gauges",
-			Value: true,
-			Usage: "don't send values to graphite for inactive gauges, as opposed to sending the previous value",
+			Name:  "resent-gauges",
+			Usage: "do sent values to graphite for inactive gauges, as opposed to not sending the previous value",
 		},
 		cli.IntFlag{
 			Name:  "persist-count-keys",
