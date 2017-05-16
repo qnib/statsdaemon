@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/codegangsta/cli"
+	"github.com/zpatrick/go-config"
 	"io"
 	"log"
 	"math"
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 	"syscall"
+	"github.com/qnib/qframe-types"
 )
 
 const (
@@ -24,8 +25,10 @@ const (
 )
 
 type StatsDaemon struct {
+	Name			string
+	Parser			MsgParser
 	Signalchan 		chan os.Signal
-	Ctx   			*cli.Context
+	Cfg   			*config.Config
 	In          	chan *Packet
 	Counters		map[string]float64
 	Gauges			map[string]float64
@@ -33,14 +36,17 @@ type StatsDaemon struct {
 	CountInactivity	map[string]int64
 	Sets 			map[string][]string
 	ReceiveCounter	string
+	QChan			qtypes.QChan
 
 
 }
 
-func NewStatsdaemon(ctx *cli.Context) StatsDaemon {
+func NewStatsdaemon(cfg *config.Config) StatsDaemon {
 	sd := StatsDaemon{
+		Name:				"statsd",
+		Parser: 			MsgParser{debug: true},
 		Signalchan: 		make(chan os.Signal, 1),
-		Ctx: 				ctx,
+		Cfg: 				cfg,
 		In: 				make(chan *Packet, MAX_UNPROCESSED_PACKETS),
 		Counters: 			make(map[string]float64),
 		Gauges:          	make(map[string]float64),
@@ -48,9 +54,52 @@ func NewStatsdaemon(ctx *cli.Context) StatsDaemon {
 		CountInactivity:	make(map[string]int64),
 		Sets:   			make(map[string][]string),
 	}
-	sd.ReceiveCounter = sd.Ctx.String("receive-counter")
+	sd.ReceiveCounter, _ = sd.Cfg.StringOr("receive-counter", "")
 	return sd
 
+}
+
+func NewNamedStatsdaemon(name string, cfg *config.Config, qchan qtypes.QChan) StatsDaemon {
+	sd := NewStatsdaemon(cfg)
+	sd.Name = name
+	sd.QChan = qchan
+	return sd
+}
+
+func (sd *StatsDaemon) StringOr(path, alt string) string {
+	res, err := sd.Cfg.String(path)
+	if err != nil {
+		res = alt
+	}
+	return res
+}
+
+func (sd *StatsDaemon) String(path string) string {
+	return sd.StringOr(path, "")
+}
+
+func (sd *StatsDaemon) Bool(path string) bool {
+	return sd.BoolOr(path, false)
+}
+
+func (sd *StatsDaemon) BoolOr(path string, alt bool) bool {
+	res, err := sd.Cfg.Bool(path)
+	if err != nil {
+		res = alt
+	}
+	return res
+}
+
+func (sd *StatsDaemon) IntOr(path string, alt int) int {
+	res, err := sd.Cfg.Int(path)
+	if err != nil {
+		res = alt
+	}
+	return res
+}
+
+func (sd *StatsDaemon) Int(path string) int {
+	return sd.IntOr(path, 0)
 }
 
 func (sd *StatsDaemon) Run() {
@@ -61,7 +110,7 @@ func (sd *StatsDaemon) Run() {
 }
 
 func (sd *StatsDaemon) startUDPListener() {
-	serviceAddress := sd.Ctx.String("address")
+	serviceAddress  := sd.String("address")
 	address, _ := net.ResolveUDPAddr("udp", serviceAddress)
 	log.Printf("listening on %s", address)
 	listener, err := net.ListenUDP("udp", address)
@@ -72,7 +121,7 @@ func (sd *StatsDaemon) startUDPListener() {
 }
 
 func (sd *StatsDaemon) startTCPListener() {
-	serviceAddress := sd.Ctx.String("tcpaddr")
+	serviceAddress := sd.StringOr("tcpaddr", "")
 	if serviceAddress == "" {
 		return
 	}
@@ -96,10 +145,10 @@ func (sd *StatsDaemon) startTCPListener() {
 func (sd *StatsDaemon) ParseTo(conn io.ReadCloser, partialReads bool) {
 	defer conn.Close()
 
-	maxUdpPacketSize := sd.Ctx.Int("max-udp-packet-size")
-	prefix := sd.Ctx.String("prefix")
-	postfix := sd.Ctx.String("postfix")
-	debug := sd.Ctx.Bool("debug")
+	maxUdpPacketSize := sd.Int("max-udp-packet-size")
+	prefix := sd.String("prefix")
+	postfix := sd.String("postfix")
+	debug := sd.Bool("debug")
 	parser := NewParser(conn, partialReads, debug, maxUdpPacketSize, prefix, postfix)
 	for {
 		p, more := parser.Next()
@@ -114,7 +163,7 @@ func (sd *StatsDaemon) ParseTo(conn io.ReadCloser, partialReads bool) {
 }
 
 func (sd *StatsDaemon) monitor() {
-	flushInterval := sd.Ctx.Int("flush-interval")
+	flushInterval := sd.Int("flush-interval")
 	period := time.Duration(flushInterval) * time.Second
 	ticker := time.NewTicker(period)
 	for {
@@ -189,6 +238,49 @@ func (sd *StatsDaemon) packetHandler(s *Packet) {
 	}
 }
 
+func (sd *StatsDaemon) SubmitMetrics() (err error) {
+	now := time.Now()
+	sd.FanOutCounters(now)
+	return
+}
+
+func (sd *StatsDaemon) FanOutMetrics() {
+	now := time.Now()
+	sd.FanOutCounters(now)
+
+}
+
+func (sd *StatsDaemon) ParseLine(msg string) (err error) {
+	p := sd.Parser.parseLine([]byte(msg))
+	sd.packetHandler(p)
+	return
+}
+
+func (sd *StatsDaemon) FanOutCounters(now time.Time) int64 {
+	var num int64
+	// continue sending zeros for counters for a short period of time even if we have no new data
+	dims := map[string]string{}
+	for bucket, value := range sd.Counters {
+		m := qtypes.NewExt(sd.Name, bucket, qtypes.Counter, value, dims, now, false)
+		sd.QChan.Data.Send(m)
+		delete(sd.Counters, bucket)
+		sd.CountInactivity[bucket] = 0
+		num++
+	}
+	for bucket, purgeCount := range sd.CountInactivity {
+		if purgeCount > 0 {
+			m := qtypes.NewExt(sd.Name, bucket, qtypes.Counter, 0.0, dims, now, false)
+			sd.QChan.Data.Send(m)
+			num++
+		}
+		sd.CountInactivity[bucket] += 1
+		if sd.CountInactivity[bucket] > int64(sd.Int("persist-count-keys")) {
+			delete(sd.CountInactivity, bucket)
+		}
+	}
+	return num
+}
+
 type Packet struct {
 	Bucket   string
 	ValFlt   float64
@@ -222,7 +314,7 @@ func (sd *StatsDaemon) submit(deadline time.Time) (err error) {
 	var buffer bytes.Buffer
 	var num int64
 
-	graphiteAddress := sd.Ctx.String("graphite")
+	graphiteAddress := sd.String("graphite")
 
 	if graphiteAddress == "-" {
 		return
@@ -231,7 +323,7 @@ func (sd *StatsDaemon) submit(deadline time.Time) (err error) {
 
 	client, err := net.Dial("tcp", graphiteAddress)
 	if err != nil {
-		if sd.Ctx.Bool("debug") {
+		if sd.Bool("debug") {
 			log.Printf("WARNING: resetting counters when in debug mode")
 			sd.ProcessCounters(&buffer, now)
 			sd.ProcessGauges(&buffer, now)
@@ -256,7 +348,7 @@ func (sd *StatsDaemon) submit(deadline time.Time) (err error) {
 		return nil
 	}
 
-	if sd.Ctx.Bool("debug") {
+	if sd.Bool("debug") {
 		for _, line := range bytes.Split(buffer.Bytes(), []byte("\n")) {
 			if len(line) == 0 {
 				continue
@@ -291,7 +383,7 @@ func (sd *StatsDaemon) ProcessCounters(buffer *bytes.Buffer, now int64) int64 {
 			num++
 		}
 		sd.CountInactivity[bucket] += 1
-		if sd.CountInactivity[bucket] > int64(sd.Ctx.Int("persist-count-keys")) {
+		if sd.CountInactivity[bucket] > int64(sd.Int("persist-count-keys")) {
 			delete(sd.CountInactivity, bucket)
 		}
 	}
@@ -304,7 +396,7 @@ func (sd *StatsDaemon) ProcessGauges(buffer *bytes.Buffer, now int64) int64 {
 	for bucket, currentValue := range sd.Gauges {
 		fmt.Fprintf(buffer, "%s %s %d\n", bucket, strconv.FormatFloat(currentValue, 'f', -1, 64), now)
 		num++
-		if ! sd.Ctx.Bool("resent-gauges") {
+		if ! sd.Bool("resent-gauges") {
 			delete(sd.Gauges, bucket)
 		}
 	}
@@ -328,7 +420,7 @@ func (sd *StatsDaemon) ProcessSets(buffer *bytes.Buffer, now int64) int64 {
 
 func (sd *StatsDaemon) ProcessTimers(buffer *bytes.Buffer, now int64, pctls Percentiles) int64 {
 	var num int64
-	postfix := sd.Ctx.String("postfix")
+	postfix := sd.String("postfix")
 	for bucket, timer := range sd.Timers {
 		bucketWithoutPostfix := bucket[:len(bucket)-len(postfix)]
 		num++
