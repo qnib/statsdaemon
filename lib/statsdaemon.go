@@ -144,7 +144,6 @@ func (sd *StatsDaemon) packetHandler(s *Packet) {
 		sd.Counters[sd.ReceiveCounter] += 1
 	}
 
-
 	switch s.Modifier {
 	case "ms":
 		_, ok := sd.Timers[s.Bucket]
@@ -306,7 +305,7 @@ func (sd *StatsDaemon) ProcessGauges(buffer *bytes.Buffer, now int64) int64 {
 	for bucket, currentValue := range sd.Gauges {
 		fmt.Fprintf(buffer, "%s %s %d\n", bucket, strconv.FormatFloat(currentValue, 'f', -1, 64), now)
 		num++
-		if sd.Ctx.Bool("resend-gauges") {
+		if sd.Ctx.Bool("delete-gauges") {
 			delete(sd.Gauges, bucket)
 		}
 	}

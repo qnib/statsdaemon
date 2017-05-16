@@ -51,7 +51,8 @@ func main() {
 			Usage: "print statistics sent to graphite",
 		},
 		cli.BoolFlag{
-			Name:  "resend-gauges",
+			Name:  "delete-gauges",
+			Value: true,
 			Usage: "don't send values to graphite for inactive gauges, as opposed to sending the previous value",
 		},
 		cli.IntFlag{

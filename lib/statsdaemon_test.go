@@ -1,17 +1,15 @@
 package statsdaemon
 
 import (
-	/*
-	"bytes"
-	"math"
+	//"bytes"
 	"math/rand"
-	"net"
 	"strconv"
-	"sync"
+	//"sync"
 	"time"
-	*/
+	//"net"
 	"bytes"
 	"flag"
+	"math"
 	"testing"
 
 	"github.com/bmizerany/assert"
@@ -28,14 +26,29 @@ var (
 
 )
 
-func NewCtx() cli.Context {
+func NewSet() *flag.FlagSet {
 	set := flag.NewFlagSet("test", 0)
 	set.String("address", ":8125", "doc")
 	set.Bool("debug", true, "doc")
-	globalSet := flag.NewFlagSet("test", 0)
-	ctx := cli.NewContext(nil, set, globalSet)
-	return *ctx
+	set.Bool("delete-gauges", true, "doc")
+	set.Int("persist-count-keys", 60, "doc")
+	return set
 }
+func NewGlobalSet() *flag.FlagSet {
+	globalSet := flag.NewFlagSet("test", 0)
+	return globalSet
+}
+func NewCtx(set, gset *flag.FlagSet) *cli.Context {
+	ctx := cli.NewContext(nil, set, gset)
+	return ctx
+}
+
+func NewMP() MsgParser {
+	return MsgParser{
+		debug: false,
+	}
+}
+
 
 func TestParseLineGauge(t *testing.T) {
 
@@ -346,10 +359,11 @@ func TestMultiLine(t *testing.T) {
 	assert.Equal(t, float32(1), packet.Sampling)
 }
 
-/*
 func TestPacketHandlerReceiveCounter(t *testing.T) {
-	counters = make(map[string]float64)
-	*receiveCounter = "countme"
+	set := NewSet()
+	set.String("receive-counter", "countme", "doc")
+	ctx := NewCtx(set, NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 
 	p := &Packet{
 		Bucket:   "gorets",
@@ -357,15 +371,16 @@ func TestPacketHandlerReceiveCounter(t *testing.T) {
 		Modifier: "c",
 		Sampling: float32(1),
 	}
-	packetHandler(p)
-	assert.Equal(t, counters["countme"], float64(1))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Counters["countme"], float64(1))
 
-	packetHandler(p)
-	assert.Equal(t, counters["countme"], float64(2))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Counters["countme"], float64(2))
 }
 
 func TestPacketHandlerCount(t *testing.T) {
-	counters = make(map[string]float64)
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 
 	p := &Packet{
 		Bucket:   "gorets",
@@ -373,25 +388,25 @@ func TestPacketHandlerCount(t *testing.T) {
 		Modifier: "c",
 		Sampling: float32(1),
 	}
-	packetHandler(p)
-	assert.Equal(t, counters["gorets"], float64(100))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Counters["gorets"], float64(100))
 
 	p.ValFlt = float64(3)
-	packetHandler(p)
-	assert.Equal(t, counters["gorets"], float64(103))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Counters["gorets"], float64(103))
 
 	p.ValFlt = float64(-4)
-	packetHandler(p)
-	assert.Equal(t, counters["gorets"], float64(99))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Counters["gorets"], float64(99))
 
 	p.ValFlt = float64(-100)
-	packetHandler(p)
-	assert.Equal(t, counters["gorets"], float64(-1))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Counters["gorets"], float64(-1))
 }
 
 func TestPacketHandlerGauge(t *testing.T) {
-	gauges = make(map[string]float64)
-
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 	p := &Packet{
 		Bucket:   "gaugor",
 		ValFlt:   333,
@@ -399,42 +414,43 @@ func TestPacketHandlerGauge(t *testing.T) {
 		Modifier: "g",
 		Sampling: float32(1),
 	}
-	packetHandler(p)
-	assert.Equal(t, gauges["gaugor"], float64(333))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Gauges["gaugor"], float64(333))
 
 	// -10
 	p.ValFlt = 10
 	p.ValStr = "-"
-	packetHandler(p)
-	assert.Equal(t, gauges["gaugor"], float64(323))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Gauges["gaugor"], float64(323))
 
 	// +4
 	p.ValFlt = 4
 	p.ValStr = "+"
-	packetHandler(p)
-	assert.Equal(t, gauges["gaugor"], float64(327))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Gauges["gaugor"], float64(327))
 
 	// <0 overflow
 	p.ValFlt = 10
 	p.ValStr = ""
-	packetHandler(p)
+	sd.packetHandler(p)
 	p.ValFlt = 20
 	p.ValStr = "-"
-	packetHandler(p)
-	assert.Equal(t, gauges["gaugor"], float64(0))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Gauges["gaugor"], float64(0))
 
 	// >MaxFloat64 overflow
 	p.ValFlt = float64(math.MaxFloat64 - 10)
 	p.ValStr = ""
-	packetHandler(p)
+	sd.packetHandler(p)
 	p.ValFlt = 20
 	p.ValStr = "+"
-	packetHandler(p)
-	assert.Equal(t, gauges["gaugor"], float64(math.MaxFloat64))
+	sd.packetHandler(p)
+	assert.Equal(t, sd.Gauges["gaugor"], float64(math.MaxFloat64))
 }
 
 func TestPacketHandlerTimer(t *testing.T) {
-	timers = make(map[string]Float64Slice)
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 
 	p := &Packet{
 		Bucket:   "glork",
@@ -442,60 +458,60 @@ func TestPacketHandlerTimer(t *testing.T) {
 		Modifier: "ms",
 		Sampling: float32(1),
 	}
-	packetHandler(p)
-	assert.Equal(t, len(timers["glork"]), 1)
-	assert.Equal(t, timers["glork"][0], float64(320))
+	sd.packetHandler(p)
+	assert.Equal(t, len(sd.Timers["glork"]), 1)
+	assert.Equal(t, sd.Timers["glork"][0], float64(320))
 
 	p.ValFlt = float64(100)
-	packetHandler(p)
-	assert.Equal(t, len(timers["glork"]), 2)
-	assert.Equal(t, timers["glork"][1], float64(100))
+	sd.packetHandler(p)
+	assert.Equal(t, len(sd.Timers["glork"]), 2)
+	assert.Equal(t, sd.Timers["glork"][1], float64(100))
 }
 
 func TestPacketHandlerSet(t *testing.T) {
-	sets = make(map[string][]string)
-
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 	p := &Packet{
 		Bucket:   "uniques",
 		ValStr:   "765",
 		Modifier: "s",
 		Sampling: float32(1),
 	}
-	packetHandler(p)
-	assert.Equal(t, len(sets["uniques"]), 1)
-	assert.Equal(t, sets["uniques"][0], "765")
+	sd.packetHandler(p)
+	assert.Equal(t, len(sd.Sets["uniques"]), 1)
+	assert.Equal(t, sd.Sets["uniques"][0], "765")
 
 	p.ValStr = "567"
-	packetHandler(p)
-	assert.Equal(t, len(sets["uniques"]), 2)
-	assert.Equal(t, sets["uniques"][1], "567")
+	sd.packetHandler(p)
+	assert.Equal(t, len(sd.Sets["uniques"]), 2)
+	assert.Equal(t, sd.Sets["uniques"][1], "567")
 }
 
 func TestProcessCounters(t *testing.T) {
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 
-	*persistCountKeys = int64(10)
-	counters = make(map[string]float64)
 	var buffer bytes.Buffer
 	now := int64(1418052649)
 
-	counters["gorets"] = float64(123)
+	sd.Counters["gorets"] = float64(123)
 
-	num := processCounters(&buffer, now)
+	num := sd.ProcessCounters(&buffer, now)
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, buffer.String(), "gorets 123 1418052649\n")
 
 	// run processCounters() enough times to make sure it purges items
-	for i := 0; i < int(*persistCountKeys)+10; i++ {
-		num = processCounters(&buffer, now)
+	for i := 0; i < sd.Ctx.Int("persist-count-keys")+10; i++ {
+		num = sd.ProcessCounters(&buffer, now)
 	}
 	lines := bytes.Split(buffer.Bytes(), []byte("\n"))
 
 	// expect two more lines - the good one and an empty one at the end
-	assert.Equal(t, len(lines), int(*persistCountKeys+2))
+	assert.Equal(t, len(lines), sd.Ctx.Int("persist-count-keys")+2)
 	assert.Equal(t, string(lines[0]), "gorets 123 1418052649")
-	assert.Equal(t, string(lines[*persistCountKeys]), "gorets 0 1418052649")
+	assert.Equal(t, string(lines[sd.Ctx.Int("persist-count-keys")]), "gorets 0 1418052649")
 }
-
+/*
 func TestProcessTimers(t *testing.T) {
 	// Some data with expected mean of 20
 	timers = make(map[string]Float64Slice)
@@ -517,15 +533,17 @@ func TestProcessTimers(t *testing.T) {
 	num = processTimers(&buffer, now, Percentiles{})
 	assert.Equal(t, num, int64(0))
 }
-
+*/
 func TestProcessGauges(t *testing.T) {
-	flag.Set("delete-gauges", "false")
-	gauges = make(map[string]float64)
+	set := NewSet()
+	set.Set("delete-gauges", "false")
+	ctx := NewCtx(set, NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 	var buffer bytes.Buffer
 
 	now := int64(1418052649)
 
-	num := processGauges(&buffer, now)
+	num := sd.ProcessGauges(&buffer, now)
 	assert.Equal(t, num, int64(0))
 	assert.Equal(t, buffer.String(), "")
 
@@ -536,26 +554,26 @@ func TestProcessGauges(t *testing.T) {
 		Modifier: "g",
 		Sampling: 1.0,
 	}
-	packetHandler(p)
-	num = processGauges(&buffer, now)
+	sd.packetHandler(p)
+	num = sd.ProcessGauges(&buffer, now)
 	assert.Equal(t, num, int64(1))
-	num = processGauges(&buffer, now+20)
+	num = sd.ProcessGauges(&buffer, now+20)
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, buffer.String(), "gaugor 12345 1418052649\ngaugor 12345 1418052669\n")
 
 	buffer = bytes.Buffer{}
 	p.ValFlt = 12346.75
-	packetHandler(p)
+	sd.packetHandler(p)
 	p.ValFlt = 12347.25
-	packetHandler(p)
-	num = processGauges(&buffer, now+40)
+	sd.packetHandler(p)
+	num = sd.ProcessGauges(&buffer, now+40)
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, buffer.String(), "gaugor 12347.25 1418052689\n")
 }
 
 func TestProcessDeleteGauges(t *testing.T) {
-	flag.Set("delete-gauges", "true")
-	gauges = make(map[string]float64)
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 	var buffer bytes.Buffer
 
 	now := int64(1418052649)
@@ -568,50 +586,52 @@ func TestProcessDeleteGauges(t *testing.T) {
 		Sampling: 1.0,
 	}
 
-	packetHandler(p)
-	num := processGauges(&buffer, now)
+	sd.packetHandler(p)
+	num := sd.ProcessGauges(&buffer, now)
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, buffer.String(), "gaugordelete 12345 1418052649\n")
 
-	num = processGauges(&buffer, now+20)
+	num = sd.ProcessGauges(&buffer, now+20)
 	assert.Equal(t, num, int64(0))
 	assert.Equal(t, buffer.String(), "gaugordelete 12345 1418052649\n")
 }
 
 func TestProcessSets(t *testing.T) {
-	sets = make(map[string][]string)
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 
 	now := int64(1418052649)
 
 	var buffer bytes.Buffer
 
 	// three unique values
-	sets["uniques"] = []string{"123", "234", "345"}
-	num := processSets(&buffer, now)
+	sd.Sets["uniques"] = []string{"123", "234", "345"}
+	num := sd.ProcessSets(&buffer, now)
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, buffer.String(), "uniques 3 1418052649\n")
 
 	// one value is repeated
 	buffer.Reset()
-	sets["uniques"] = []string{"123", "234", "234"}
-	num = processSets(&buffer, now)
+	sd.Sets["uniques"] = []string{"123", "234", "234"}
+	num = sd.ProcessSets(&buffer, now)
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, buffer.String(), "uniques 2 1418052649\n")
 
 	// make sure sets are purged
-	num = processSets(&buffer, now)
+	num = sd.ProcessSets(&buffer, now)
 	assert.Equal(t, num, int64(0))
 }
-
+/*
 func TestProcessTimersUpperPercentile(t *testing.T) {
 	// Some data with expected 75% of 2
-	timers = make(map[string]Float64Slice)
-	timers["response_time"] = []float64{0, 1, 2, 3}
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
+	sd.Timers["response_time"] = []float64{0, 1, 2, 3}
 
 	now := int64(1418052649)
 
 	var buffer bytes.Buffer
-	num := processTimers(&buffer, now, Percentiles{
+	num := sd.ProcessTimers(&buffer, now, Percentiles{
 		&Percentile{
 			75,
 			"75",
@@ -627,8 +647,9 @@ func TestProcessTimersUpperPercentile(t *testing.T) {
 func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
 	flag.Set("postfix", ".test")
 	// Some data with expected 75% of 2
-	timers = make(map[string]Float64Slice)
-	timers["postfix_response_time.test"] = []float64{0, 1, 2, 3}
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
+	sd.Timers["postfix_response_time.test"] = []float64{0, 1, 2, 3}
 
 	now := int64(1418052649)
 
@@ -646,7 +667,7 @@ func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
 	assert.Equal(t, string(lines[0]), "postfix_response_time.upper_75.test 2 1418052649")
 	flag.Set("postfix", "")
 }
-
+/*
 func TestProcessTimesLowerPercentile(t *testing.T) {
 	timers = make(map[string]Float64Slice)
 	timers["time"] = []float64{0, 1, 2, 3}
@@ -666,20 +687,22 @@ func TestProcessTimesLowerPercentile(t *testing.T) {
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, string(lines[0]), "time.lower_75 1 1418052649")
 }
-
+/*
 func TestMultipleUDPSends(t *testing.T) {
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 	addr := "127.0.0.1:8126"
 
 	address, _ := net.ResolveUDPAddr("udp", addr)
 	listener, err := net.ListenUDP("udp", address)
 	assert.Equal(t, nil, err)
 
-	ch := make(chan *Packet, MAX_UNPROCESSED_PACKETS)
+	sd.In = make(chan *Packet, MAX_UNPROCESSED_PACKETS)
 
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
-		parseTo(listener, false, ch)
+		sd.ParseTo(listener, false)
 		wg.Done()
 	}()
 
@@ -697,29 +720,29 @@ func TestMultipleUDPSends(t *testing.T) {
 	assert.Equal(t, len("deploys.test.myservice:1|c"), n)
 
 	select {
-	case pack := <-ch:
+	case pack := <-sd.In:
 		assert.Equal(t, "deploys.test.myservice", pack.Bucket)
 		assert.Equal(t, float64(2), pack.ValFlt)
 		assert.Equal(t, "c", pack.Modifier)
 		assert.Equal(t, float32(1), pack.Sampling)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(150 * time.Millisecond):
 		t.Fatal("packet receive timeout")
 	}
 
 	select {
-	case pack := <-ch:
+	case pack := <-sd.In:
 		assert.Equal(t, "deploys.test.myservice", pack.Bucket)
 		assert.Equal(t, float64(1), pack.ValFlt)
 		assert.Equal(t, "c", pack.Modifier)
 		assert.Equal(t, float32(1), pack.Sampling)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(150 * time.Millisecond):
 		t.Fatal("packet receive timeout")
 	}
 
 	listener.Close()
 	wg.Wait()
 }
-
+/*
 func BenchmarkManyDifferentSensors(t *testing.B) {
 	r := rand.New(rand.NewSource(438))
 	for i := 0; i < 1000; i++ {
@@ -767,78 +790,93 @@ func BenchmarkOneBigTimer(t *testing.B) {
 	processTimers(&buff, time.Now().Unix(), commonPercentiles)
 }
 
+*/
 func BenchmarkLotsOfTimers(t *testing.B) {
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
 	r := rand.New(rand.NewSource(438))
 	for i := 0; i < 1000; i++ {
 		bucket := "response_time" + strconv.Itoa(i)
 		for i := 0; i < 10000; i++ {
 			a := float64(r.Uint32() % 1000)
-			timers[bucket] = append(timers[bucket], a)
+			sd.Timers[bucket] = append(sd.Timers[bucket], a)
 		}
 	}
 
 	var buff bytes.Buffer
 	t.ResetTimer()
-	processTimers(&buff, time.Now().Unix(), commonPercentiles)
+	sd.ProcessTimers(&buff, time.Now().Unix(), commonPercentiles)
 }
 
 
 func BenchmarkParseLineCounter(b *testing.B) {
+	mp := NewMP()
 	d1 := []byte("a.key.with-0.dash:4|c|@0.5")
 	d2 := []byte("normal.key.space:1|c")
 
 	for i := 0; i < b.N; i++ {
-		parseLine(d1)
-		parseLine(d2)
+		mp.parseLine(d1)
+		mp.parseLine(d2)
 	}
 }
+
+
 func BenchmarkParseLineGauge(b *testing.B) {
+	mp := NewMP()
 	d1 := []byte("gaugor.whatever:333.4|g")
 	d2 := []byte("gaugor.whatever:-5|g")
 
 	for i := 0; i < b.N; i++ {
-		parseLine(d1)
-		parseLine(d2)
+		mp.parseLine(d1)
+		mp.parseLine(d2)
 	}
 }
 func BenchmarkParseLineTimer(b *testing.B) {
+	mp := NewMP()
 	d1 := []byte("glork.some.keyspace:3.7211|ms")
 	d2 := []byte("glork.some.keyspace:11223|ms")
 
 	for i := 0; i < b.N; i++ {
-		parseLine(d1)
-		parseLine(d2)
+		mp.parseLine(d1)
+		mp.parseLine(d2)
 	}
 }
 func BenchmarkParseLineSet(b *testing.B) {
+	mp := NewMP()
 	d1 := []byte("setof.some.keyspace:hiya|s")
 	d2 := []byte("setof.some.keyspace:411|s")
 
 	for i := 0; i < b.N; i++ {
-		parseLine(d1)
-		parseLine(d2)
+		mp.parseLine(d1)
+		mp.parseLine(d2)
 	}
 }
+
 func BenchmarkPacketHandlerCounter(b *testing.B) {
-	d1 := parseLine([]byte("a.key.with-0.dash:4|c|@0.5"))
-	d2 := parseLine([]byte("normal.key.space:1|c"))
-	counters = make(map[string]float64)
+	mp := NewMP()
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
+	d1 := mp.parseLine([]byte("a.key.with-0.dash:4|c|@0.5"))
+	d2 := mp.parseLine([]byte("normal.key.space:1|c"))
 
 	for i := 0; i < b.N; i++ {
-		packetHandler(d1)
-		packetHandler(d2)
+		sd.packetHandler(d1)
+		sd.packetHandler(d2)
 	}
 }
 func BenchmarkPacketHandlerGauge(b *testing.B) {
-	d1 := parseLine([]byte("gaugor.whatever:333.4|g"))
-	d2 := parseLine([]byte("gaugor.whatever:-5|g"))
-	gauges = make(map[string]float64)
+	mp := NewMP()
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
+	d1 := mp.parseLine([]byte("gaugor.whatever:333.4|g"))
+	d2 := mp.parseLine([]byte("gaugor.whatever:-5|g"))
 
 	for i := 0; i < b.N; i++ {
-		packetHandler(d1)
-		packetHandler(d2)
+		sd.packetHandler(d1)
+		sd.packetHandler(d2)
 	}
 }
+/*
 func BenchmarkPacketHandlerTimer(b *testing.B) {
 	d1 := parseLine([]byte("glork.some.keyspace:3.7211|ms"))
 	d2 := parseLine([]byte("glork.some.keyspace:11223|ms"))
@@ -849,17 +887,20 @@ func BenchmarkPacketHandlerTimer(b *testing.B) {
 		packetHandler(d2)
 	}
 }
+*/
 func BenchmarkPacketHandlerSet(b *testing.B) {
-	d1 := parseLine([]byte("setof.some.keyspace:hiya|s"))
-	d2 := parseLine([]byte("setof.some.keyspace:411|s"))
-	sets = make(map[string][]string)
+	mp := NewMP()
+	ctx := NewCtx(NewSet(), NewGlobalSet())
+	sd := NewStatsdaemon(ctx)
+	d1 := mp.parseLine([]byte("setof.some.keyspace:hiya|s"))
+	d2 := mp.parseLine([]byte("setof.some.keyspace:411|s"))
 
 	for i := 0; i < b.N; i++ {
 		if i&0xff == 0xff {
-			sets = make(map[string][]string)
+			sd.Sets = make(map[string][]string)
 		}
-		packetHandler(d1)
-		packetHandler(d2)
+		sd.packetHandler(d1)
+		sd.packetHandler(d2)
 	}
 }
-*/
+
