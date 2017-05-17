@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"github.com/codegangsta/cli"
+	"github.com/zpatrick/go-config"
 	"github.com/ChristianKniep/statsdaemon/lib"
 )
 
@@ -11,7 +12,8 @@ const (
 )
 
 func Run(ctx *cli.Context) {
-	sd := statsdaemon.NewStatsdaemon(ctx)
+	cfg := config.NewYAMLFile(ctx.String("config")
+	sd := statsdaemon.NewStatsdaemon(cfg)
 	sd.Run()
 }
 

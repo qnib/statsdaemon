@@ -11,8 +11,9 @@ import (
 
 	"github.com/zpatrick/go-config"
 
-	"github.com/bmizerany/assert"
+	"github.com/stretchr/testify/assert"
 	"github.com/codegangsta/cli"
+	"github.com/qnib/qframe-types"
 )
 
 var (
@@ -53,7 +54,7 @@ func NewSet() *flag.FlagSet {
 	set := flag.NewFlagSet("test", 0)
 	set.String("address", ":8125", "doc")
 	set.Bool("debug", true, "doc")
-	set.Bool("resent-gauges", false, "doc")
+	set.Bool("delete-gauges", false, "doc")
 	set.Int("persist-count-keys", 60, "doc")
 	return set
 }
@@ -66,321 +67,6 @@ func NewGlobalSet() *flag.FlagSet {
 func NewCtx(fset *flag.FlagSet) *cli.Context {
 	ctx := cli.NewContext(nil, fset, nil)
 	return ctx
-}
-
-func NewMP() MsgParser {
-	return MsgParser{
-		debug: false,
-	}
-}
-
-func TestParseLineGauge(t *testing.T) {
-
-	mp := MsgParser{
-		debug: true,
-	}
-	d := []byte("gaugor:333|g")
-	packet := mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gaugor", packet.Bucket)
-	assert.Equal(t, float64(333), packet.ValFlt)
-	assert.Equal(t, "", packet.ValStr)
-	assert.Equal(t, "g", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("gaugor:-10|g")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gaugor", packet.Bucket)
-	assert.Equal(t, float64(10), packet.ValFlt)
-	assert.Equal(t, "-", packet.ValStr)
-	assert.Equal(t, "g", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("gaugor:+4|g")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gaugor", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "+", packet.ValStr)
-	assert.Equal(t, "g", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	// >max(int64) && <max(uint64)
-	d = []byte("gaugor:18446744073709551606|g")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gaugor", packet.Bucket)
-	assert.Equal(t, float64(18446744073709551606), packet.ValFlt)
-	assert.Equal(t, "", packet.ValStr)
-	assert.Equal(t, "g", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	// float values
-	d = []byte("gaugor:3.3333|g")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gaugor", packet.Bucket)
-	assert.Equal(t, float64(3.3333), packet.ValFlt)
-	assert.Equal(t, "", packet.ValStr)
-	assert.Equal(t, "g", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-}
-
-func TestParseLineCount(t *testing.T) {
-	mp := MsgParser{
-		debug: true,
-	}
-	d := []byte("gorets:2|c|@0.1")
-	packet := mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gorets", packet.Bucket)
-	assert.Equal(t, float64(2), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(0.1), packet.Sampling)
-
-	d = []byte("gorets:4|c")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gorets", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("gorets:-4|c")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gorets", packet.Bucket)
-	assert.Equal(t, float64(-4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("gorets:1.25|c")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "gorets", packet.Bucket)
-	assert.Equal(t, 1.25, packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-}
-
-func TestParseLineTimer(t *testing.T) {
-	mp := MsgParser{
-		debug: true,
-	}
-	d := []byte("glork:320|ms")
-	packet := mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "glork", packet.Bucket)
-	assert.Equal(t, float64(320), packet.ValFlt)
-	assert.Equal(t, "ms", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("glork:320|ms|@0.1")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "glork", packet.Bucket)
-	assert.Equal(t, float64(320), packet.ValFlt)
-	assert.Equal(t, "ms", packet.Modifier)
-	assert.Equal(t, float32(0.1), packet.Sampling)
-
-	d = []byte("glork:3.7211|ms")
-	packet = mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "glork", packet.Bucket)
-	assert.Equal(t, float64(3.7211), packet.ValFlt)
-	assert.Equal(t, "ms", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-}
-
-func TestParseLineSet(t *testing.T) {
-	mp := MsgParser{
-		debug: true,
-	}
-	d := []byte("uniques:765|s")
-	packet := mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "uniques", packet.Bucket)
-	assert.Equal(t, "765", packet.ValStr)
-	assert.Equal(t, "s", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-}
-
-func TestParseLineMisc(t *testing.T) {
-	mp := MsgParser{
-		debug: true,
-	}
-
-	d := []byte("a.key.with-0.dash:4|c")
-	packet := mp.parseLine(d)
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, "a.key.with-0.dash", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("a.key.with 0.space:4|c")
-	packet = mp.parseLine(d)
-	assert.Equal(t, "a.key.with_0.space", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("a.key.with/0.slash:4|c")
-	packet = mp.parseLine(d)
-	assert.Equal(t, "a.key.with-0.slash", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("a.key.with@#*&%$^_0.garbage:4|c")
-	packet = mp.parseLine(d)
-	assert.Equal(t, "a.key.with_0.garbage", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	mp.prefix = "test."
-	d = []byte("prefix:4|c")
-	packet = mp.parseLine(d)
-	assert.Equal(t, "test.prefix", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-	mp.prefix = ""
-	mp.postfix = ".test"
-	d = []byte("postfix:4|c")
-	packet = mp.parseLine(d)
-	assert.Equal(t, "postfix.test", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-	mp.postfix = ""
-
-	d = []byte("a.key.with-0.dash:4|c\ngauge:3|g")
-	parser := NewParser(bytes.NewBuffer(d), true, mp.debug, mp.maxUdpPacketSize, mp.prefix, mp.postfix)
-	packet, more := parser.Next()
-	assert.Equal(t, more, true)
-	assert.Equal(t, "a.key.with-0.dash", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	packet, more = parser.Next()
-	assert.Equal(t, more, false)
-	assert.Equal(t, "gauge", packet.Bucket)
-	assert.Equal(t, 3.0, packet.ValFlt)
-	assert.Equal(t, "", packet.ValStr)
-	assert.Equal(t, "g", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	d = []byte("a.key.with-0.dash:4\ngauge3|g")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("a.key.with-0.dash:4")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gorets:5m")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gorets")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gorets:")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gorets:5|mg")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gorets:5|ms|@")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gorets:xxx|c")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gaugor:xxx|g")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("gaugor:xxx|z")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("deploys.test.myservice4:100|t")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("up-to-colon:")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-
-	d = []byte("up-to-pipe:1|")
-	packet = mp.parseLine(d)
-	if packet != nil {
-		t.Fail()
-	}
-}
-
-func TestMultiLine(t *testing.T) {
-	mp := MsgParser{
-		debug: true,
-	}
-	b := bytes.NewBuffer([]byte("a.key.with-0.dash:4|c\ngauge:3|g"))
-	parser := NewParser(b, true, mp.debug, mp.maxUdpPacketSize, mp.prefix, mp.postfix)
-	packet, more := parser.Next()
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, more, true)
-	assert.Equal(t, "a.key.with-0.dash", packet.Bucket)
-	assert.Equal(t, float64(4), packet.ValFlt)
-	assert.Equal(t, "c", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
-
-	packet, more = parser.Next()
-	assert.NotEqual(t, packet, nil)
-	assert.Equal(t, more, false)
-	assert.Equal(t, "gauge", packet.Bucket)
-	assert.Equal(t, 3.0, packet.ValFlt)
-	assert.Equal(t, "", packet.ValStr)
-	assert.Equal(t, "g", packet.Modifier)
-	assert.Equal(t, float32(1), packet.Sampling)
 }
 
 func TestPacketHandlerReceiveCounter(t *testing.T) {
@@ -537,8 +223,7 @@ func TestProcessCounters(t *testing.T) {
 }
 
 func TestProcessGauges(t *testing.T) {
-	pre := map[string]string{"resent-gauges": "true"}
-	cfg := NewPreCfg(pre)
+	cfg := NewCfg()
 	sd := NewStatsdaemon(cfg)
 	var buffer bytes.Buffer
 	now := int64(1418052649)
@@ -572,7 +257,8 @@ func TestProcessGauges(t *testing.T) {
 }
 
 func TestProcessDeleteGauges(t *testing.T) {
-	cfg := NewCfg()
+	pre := map[string]string{"delete-gauges": "true"}
+	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 	var buffer bytes.Buffer
 
@@ -710,6 +396,124 @@ func TestProcessTimesLowerPercentile(t *testing.T) {
 
 	assert.Equal(t, num, int64(1))
 	assert.Equal(t, string(lines[0]), "time.lower_75 1 1418052649")
+}
+
+func TestStatsDaemonParseLine(t *testing.T) {
+	cfg := NewCfg()
+	sd := NewStatsdaemon(cfg)
+	sd.ParseLine("gorets:100|c")
+	assert.Equal(t, float64(100), sd.Counters["gorets"])
+	sd.ParseLine("gorets:3|c")
+	assert.Equal(t, float64(103), sd.Counters["gorets"])
+	sd.ParseLine("gorets:-4|c")
+	assert.Equal(t, float64(99), sd.Counters["gorets"])
+	sd.ParseLine("gorets:-100|c")
+	assert.Equal(t, float64(-1), sd.Counters["gorets"])
+	//Gauges
+	sd.ParseLine("testGauge:+100|g")
+	assert.Equal(t, float64(100), sd.Gauges["testGauge"])
+
+}
+
+func TestStatsDaemonFanOutCounters(t *testing.T) {
+	cfg := NewCfg()
+	qchan := qtypes.NewQChan()
+	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	qchan.Broadcast()
+	dc := qchan.Data.Join()
+	sd.ParseLine("gorets:100|c")
+	sd.ParseLine("gorets:3|c")
+	now := time.Unix(1495028544, 0)
+	sd.FanOutCounters(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(103), met.Value)
+		assert.Equal(t, "gorets", met.Name)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
+	sd.FanOutCounters(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(0), met.Value)
+		assert.Equal(t, "gorets", met.Name)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
+
+}
+
+func TestStatsDaemonFanOutGauges(t *testing.T) {
+	cfg := NewCfg()
+	qchan := qtypes.NewQChan()
+	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	qchan.Broadcast()
+	dc := qchan.Data.Join()
+	sd.ParseLine("testGauge:100|g")
+	assert.Equal(t, float64(100), sd.Gauges["testGauge"])
+	now := time.Unix(1495028544, 0)
+	sd.FanOutGauges(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(100), met.Value)
+		assert.Equal(t, "testGauge", met.Name)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
+	sd.ParseLine("testGauge:-50|g")
+	assert.Equal(t, float64(50), sd.Gauges["testGauge"])
+	sd.FanOutGauges(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(50), met.Value)
+		assert.Equal(t, "testGauge", met.Name)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
+	sd.ParseLine("testGauge:+10|g")
+	assert.Equal(t, float64(60), sd.Gauges["testGauge"])
+}
+
+func TestStatsDaemonFanOutGaugesDelete(t *testing.T) {
+	pre := map[string]string{"delete-gauges": "true"}
+	cfg := NewPreCfg(pre)
+	qchan := qtypes.NewQChan()
+	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	qchan.Broadcast()
+	dc := qchan.Data.Join()
+	sd.ParseLine("testGauge:100|g")
+	assert.Equal(t, float64(100), sd.Gauges["testGauge"])
+	now := time.Unix(1495028544, 0)
+	sd.FanOutGauges(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(100), met.Value)
+		assert.Equal(t, "testGauge", met.Name)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
+	sd.ParseLine("testGauge:-50|g")
+	assert.Equal(t, float64(0), sd.Gauges["testGauge"])
+	sd.FanOutGauges(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(0), met.Value)
+		assert.Equal(t, "testGauge", met.Name)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
 }
 
 /*

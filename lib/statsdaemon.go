@@ -66,6 +66,17 @@ func NewNamedStatsdaemon(name string, cfg *config.Config, qchan qtypes.QChan) St
 	return sd
 }
 
+func (sd *StatsDaemon) Log(logLevel, msg string) {
+	// TODO: Setup in each Log() invocation seems rude
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	dL, _ := sd.Cfg.StringOr("log.level", "info")
+	dI := qtypes.LogStrToInt(dL)
+	lI := qtypes.LogStrToInt(logLevel)
+	if dI >= lI {
+		log.Printf("[%+6s] %15s Name:%-10s >> %s", strings.ToUpper(logLevel), "statsdaemon", sd.Name, msg)
+	}
+}
+
 func (sd *StatsDaemon) StringOr(path, alt string) string {
 	res, err := sd.Cfg.String(path)
 	if err != nil {
@@ -106,13 +117,13 @@ func (sd *StatsDaemon) Run() {
 	signal.Notify(sd.Signalchan, syscall.SIGTERM)
 	go sd.startUDPListener()
 	go sd.startTCPListener()
-	sd.monitor()
+	sd.LoopChannel()
 }
 
 func (sd *StatsDaemon) startUDPListener() {
-	serviceAddress  := sd.String("address")
+	serviceAddress  := sd.StringOr("address", ":8125")
 	address, _ := net.ResolveUDPAddr("udp", serviceAddress)
-	log.Printf("listening on %s", address)
+	sd.Log("info", fmt.Sprintf("listening on %s", address))
 	listener, err := net.ListenUDP("udp", address)
 	if err != nil {
 		log.Fatalf("ERROR: ListenUDP - %s", err)
@@ -162,9 +173,22 @@ func (sd *StatsDaemon) ParseTo(conn io.ReadCloser, partialReads bool) {
 	}
 }
 
+func (sd *StatsDaemon) LoopChannel() {
+	tickMs := sd.IntOr("send-metric-ms", 1000)
+	ticker := time.NewTicker(time.Duration(tickMs)*time.Millisecond).C
+	for {
+		select {
+		case s := <-sd.In:
+			sd.packetHandler(s)
+		case <-ticker:
+			sd.FanOutMetrics()
+		}
+	}
+}
+
 func (sd *StatsDaemon) monitor() {
-	flushInterval := sd.Int("flush-interval")
-	period := time.Duration(flushInterval) * time.Second
+	flushInterval := sd.IntOr("flush-interval-ms", 1000)
+	period := time.Duration(flushInterval) * time.Millisecond
 	ticker := time.NewTicker(period)
 	for {
 		select {
@@ -203,7 +227,6 @@ func (sd *StatsDaemon) packetHandler(s *Packet) {
 		sd.Timers[s.Bucket] = append(sd.Timers[s.Bucket], s.ValFlt)
 	case "g":
 		gaugeValue, _ := sd.Gauges[s.Bucket]
-
 		if s.ValStr == "" {
 			gaugeValue = s.ValFlt
 		} else if s.ValStr == "+" {
@@ -221,7 +244,6 @@ func (sd *StatsDaemon) packetHandler(s *Packet) {
 				gaugeValue -= s.ValFlt
 			}
 		}
-
 		sd.Gauges[s.Bucket] = gaugeValue
 	case "c":
 		_, ok := sd.Counters[s.Bucket]
@@ -238,16 +260,10 @@ func (sd *StatsDaemon) packetHandler(s *Packet) {
 	}
 }
 
-func (sd *StatsDaemon) SubmitMetrics() (err error) {
-	now := time.Now()
-	sd.FanOutCounters(now)
-	return
-}
-
 func (sd *StatsDaemon) FanOutMetrics() {
 	now := time.Now()
 	sd.FanOutCounters(now)
-
+	sd.FanOutGauges(now)
 }
 
 func (sd *StatsDaemon) ParseLine(msg string) (err error) {
@@ -261,6 +277,8 @@ func (sd *StatsDaemon) FanOutCounters(now time.Time) int64 {
 	// continue sending zeros for counters for a short period of time even if we have no new data
 	dims := map[string]string{}
 	for bucket, value := range sd.Counters {
+		msg := fmt.Sprintf("Create NewExt(%s, %s, %s, %v, %v, %v)", sd.Name, bucket, qtypes.Counter, value, dims, now)
+		sd.Log("info", msg)
 		m := qtypes.NewExt(sd.Name, bucket, qtypes.Counter, value, dims, now, false)
 		sd.QChan.Data.Send(m)
 		delete(sd.Counters, bucket)
@@ -281,12 +299,18 @@ func (sd *StatsDaemon) FanOutCounters(now time.Time) int64 {
 	return num
 }
 
-type Packet struct {
-	Bucket   string
-	ValFlt   float64
-	ValStr   string
-	Modifier string
-	Sampling float32
+func (sd *StatsDaemon) FanOutGauges(now time.Time) int64 {
+	var num int64
+	dims := map[string]string{}
+	for bucket, currentValue := range sd.Gauges {
+		m := qtypes.NewExt(sd.Name, bucket, qtypes.Gauge, currentValue, dims, now, false)
+		sd.QChan.Data.Send(m)
+		num++
+		if sd.Bool("delete-gauges") {
+			delete(sd.Gauges, bucket)
+		}
+	}
+	return num
 }
 
 func sanitizeBucket(bucket string) string {
@@ -396,7 +420,7 @@ func (sd *StatsDaemon) ProcessGauges(buffer *bytes.Buffer, now int64) int64 {
 	for bucket, currentValue := range sd.Gauges {
 		fmt.Fprintf(buffer, "%s %s %d\n", bucket, strconv.FormatFloat(currentValue, 'f', -1, 64), now)
 		num++
-		if ! sd.Bool("resent-gauges") {
+		if sd.Bool("delete-gauges") {
 			delete(sd.Gauges, bucket)
 		}
 	}
@@ -481,189 +505,3 @@ func (sd *StatsDaemon) ProcessTimers(buffer *bytes.Buffer, now int64, pctls Perc
 	return num
 }
 
-type MsgParser struct {
-	reader       		io.Reader
-	buffer       		[]byte
-	partialReads 		bool
-	done         		bool
-	debug				bool
-	maxUdpPacketSize 	int
-	prefix 				string
-	postfix				string
-
-}
-
-func NewParser(reader io.Reader, partialReads, debug bool, maxUdpPacketSize int, prefix, postfix string) *MsgParser {
-	return &MsgParser{
-		reader, []byte{},
-		partialReads, false, debug,
-		maxUdpPacketSize,
-		prefix, postfix}
-}
-
-func (mp *MsgParser) Next() (*Packet, bool) {
-	buf := mp.buffer
-
-	for {
-		line, rest := mp.lineFrom(buf)
-
-		if line != nil {
-			mp.buffer = rest
-			return mp.parseLine(line), true
-		}
-
-		if mp.done {
-			return mp.parseLine(rest), false
-		}
-
-		idx := len(buf)
-		end := idx
-		if mp.partialReads {
-			end += TCP_READ_SIZE
-		} else {
-			end += int(mp.maxUdpPacketSize)
-		}
-		if cap(buf) >= end {
-			buf = buf[:end]
-		} else {
-			tmp := buf
-			buf = make([]byte, end)
-			copy(buf, tmp)
-		}
-
-		n, err := mp.reader.Read(buf[idx:])
-		buf = buf[:idx+n]
-		if err != nil {
-			if err != io.EOF {
-				log.Printf("ERROR: %s", err)
-			}
-
-			mp.done = true
-
-			line, rest = mp.lineFrom(buf)
-			if line != nil {
-				mp.buffer = rest
-				return mp.parseLine(line), len(rest) > 0
-			}
-
-			if len(rest) > 0 {
-				return mp.parseLine(rest), false
-			}
-
-			return nil, false
-		}
-	}
-}
-
-func (mp *MsgParser) lineFrom(input []byte) ([]byte, []byte) {
-	split := bytes.SplitAfterN(input, []byte("\n"), 2)
-	if len(split) == 2 {
-		return split[0][:len(split[0])-1], split[1]
-	}
-
-	if !mp.partialReads {
-		if len(input) == 0 {
-			input = nil
-		}
-		return input, []byte{}
-	}
-
-	if bytes.HasSuffix(input, []byte("\n")) {
-		return input[:len(input)-1], []byte{}
-	}
-
-	return nil, input
-}
-
-func (mp *MsgParser) parseLine(line []byte) *Packet {
-	split := bytes.SplitN(line, []byte{'|'}, 3)
-	if len(split) < 2 {
-		mp.logParseFail(line)
-		return nil
-	}
-
-	keyval := split[0]
-	typeCode := string(split[1])
-
-	sampling := float32(1)
-	if strings.HasPrefix(typeCode, "c") || strings.HasPrefix(typeCode, "ms") {
-		if len(split) == 3 && len(split[2]) > 0 && split[2][0] == '@' {
-			f64, err := strconv.ParseFloat(string(split[2][1:]), 32)
-			if err != nil {
-				log.Printf(
-					"ERROR: failed to ParseFloat %s - %s",
-					string(split[2][1:]),
-					err,
-				)
-				return nil
-			}
-			sampling = float32(f64)
-		}
-	}
-
-	split = bytes.SplitN(keyval, []byte{':'}, 2)
-	if len(split) < 2 {
-		mp.logParseFail(line)
-		return nil
-	}
-	name := string(split[0])
-	val := split[1]
-	if len(val) == 0 {
-		mp.logParseFail(line)
-		return nil
-	}
-
-	var (
-		err      error
-		floatval float64
-		strval   string
-	)
-
-	switch typeCode {
-	case "c":
-		floatval, err = strconv.ParseFloat(string(val), 64)
-		if err != nil {
-			log.Printf("ERROR: failed to ParseFloat %s - %s", string(val), err)
-			return nil
-		}
-	case "g":
-		var s string
-
-		if val[0] == '+' || val[0] == '-' {
-			strval = string(val[0])
-			s = string(val[1:])
-		} else {
-			s = string(val)
-		}
-		floatval, err = strconv.ParseFloat(s, 64)
-		if err != nil {
-			log.Printf("ERROR: failed to ParseFloat %s - %s", string(val), err)
-			return nil
-		}
-	case "s":
-		strval = string(val)
-	case "ms":
-		floatval, err = strconv.ParseFloat(string(val), 64)
-		if err != nil {
-			log.Printf("ERROR: failed to ParseFloat %s - %s", string(val), err)
-			return nil
-		}
-	default:
-		log.Printf("ERROR: unrecognized type code %q", typeCode)
-		return nil
-	}
-
-	return &Packet{
-		Bucket:   sanitizeBucket(mp.prefix + string(name) + mp.postfix),
-		ValFlt:   floatval,
-		ValStr:   strval,
-		Modifier: typeCode,
-		Sampling: sampling,
-	}
-}
-
-func (mp *MsgParser) logParseFail(line []byte) {
-	if mp.debug {
-		log.Printf("ERROR: failed to parse line: %q\n", string(line))
-	}
-}
