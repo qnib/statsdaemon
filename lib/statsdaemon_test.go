@@ -6,24 +6,14 @@ import (
 	"time"
 	"bytes"
 	"flag"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/zpatrick/go-config"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/codegangsta/cli"
 	"github.com/qnib/qframe-types"
-)
-
-var (
-	commonPercentiles = Percentiles{
-		&Percentile{
-			99,
-			"99",
-		},
-	}
-
 )
 
 func NewCfg() *config.Config {
@@ -33,11 +23,11 @@ func NewCfg() *config.Config {
 func NewPreCfg(pre map[string]string) *config.Config {
 	cfgMap := map[string]string{
 		"log.level": "info",
-		"test": "0",
-		"address": ":8125",
-		"debug": "false",
-		"resent-gauges": "false",
-		"persist-count-keys": "60",
+		"statsd.test": "0",
+		"statsd.address": ":8125",
+		"statsd.debug": "false",
+		"statsd.resent-gauges": "false",
+		"statsd.persist-count-keys": "60",
 	}
 	for k,v := range pre {
 		cfgMap[k] = v
@@ -50,27 +40,19 @@ func NewPreCfg(pre map[string]string) *config.Config {
 	return cfg
 }
 
-func NewSet() *flag.FlagSet {
-	set := flag.NewFlagSet("test", 0)
-	set.String("address", ":8125", "doc")
-	set.Bool("debug", true, "doc")
-	set.Bool("delete-gauges", false, "doc")
-	set.Int("persist-count-keys", 60, "doc")
-	return set
-}
-
-func NewGlobalSet() *flag.FlagSet {
-	globalSet := flag.NewFlagSet("test", 0)
-	return globalSet
-}
-
-func NewCtx(fset *flag.FlagSet) *cli.Context {
-	ctx := cli.NewContext(nil, fset, nil)
-	return ctx
+func TestNewStatsdaemonPercentiles(t *testing.T) {
+	pre := map[string]string{"statsd.percentiles": "0.9"}
+	cfg := NewPreCfg(pre)
+	sd := NewStatsdaemon(cfg)
+	assert.Equal(t, "[0_9]", sd.Percentiles.String())
+	pre = map[string]string{"statsd.percentiles": "0.9,0.95"}
+	cfg = NewPreCfg(pre)
+	sd = NewStatsdaemon(cfg)
+	assert.Equal(t, "[0_9 0_95]", sd.Percentiles.String())
 }
 
 func TestPacketHandlerReceiveCounter(t *testing.T) {
-	pre := map[string]string{"receive-counter": "countme"}
+	pre := map[string]string{"statsd.receive-counter": "countme"}
 	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 
@@ -257,7 +239,7 @@ func TestProcessGauges(t *testing.T) {
 }
 
 func TestProcessDeleteGauges(t *testing.T) {
-	pre := map[string]string{"delete-gauges": "true"}
+	pre := map[string]string{"statsd.delete-gauges": "true"}
 	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 	var buffer bytes.Buffer
@@ -317,7 +299,7 @@ func TestProcessTimers(t *testing.T) {
 	now := int64(1418052649)
 
 	var buffer bytes.Buffer
-	num := sd.ProcessTimers(&buffer, now, Percentiles{})
+	num := sd.ProcessTimers(&buffer, now)
 
 	lines := bytes.Split(buffer.Bytes(), []byte("\n"))
 
@@ -327,12 +309,13 @@ func TestProcessTimers(t *testing.T) {
 	assert.Equal(t, string(lines[2]), "response_time.lower 0 1418052649")
 	assert.Equal(t, string(lines[3]), "response_time.count 3 1418052649")
 
-	num = sd.ProcessTimers(&buffer, now, Percentiles{})
+	num = sd.ProcessTimers(&buffer, now)
 	assert.Equal(t, num, int64(0))
 }
 
 func TestProcessTimersUpperPercentile(t *testing.T) {
-	cfg := NewCfg()
+	pre := map[string]string{"statsd.percentiles": "75"}
+	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 
 	// Some data with expected 75% of 2
@@ -341,12 +324,7 @@ func TestProcessTimersUpperPercentile(t *testing.T) {
 	now := int64(1418052649)
 
 	var buffer bytes.Buffer
-	num := sd.ProcessTimers(&buffer, now, Percentiles{
-		&Percentile{
-			75,
-			"75",
-		},
-	})
+	num := sd.ProcessTimers(&buffer, now)
 
 	lines := bytes.Split(buffer.Bytes(), []byte("\n"))
 
@@ -355,7 +333,10 @@ func TestProcessTimersUpperPercentile(t *testing.T) {
 }
 
 func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
-	pre := map[string]string{"postfix": ".test"}
+	pre := map[string]string{
+		"statsd.postfix": ".test",
+		"statsd.percentiles": "75",
+	}
 	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 
@@ -365,12 +346,7 @@ func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
 	now := int64(1418052649)
 
 	var buffer bytes.Buffer
-	num := sd.ProcessTimers(&buffer, now, Percentiles{
-		&Percentile{
-			75,
-			"75",
-		},
-	})
+	num := sd.ProcessTimers(&buffer, now)
 
 	lines := bytes.Split(buffer.Bytes(), []byte("\n"))
 
@@ -380,17 +356,13 @@ func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
 }
 
 func TestProcessTimesLowerPercentile(t *testing.T) {
-	cfg := NewCfg()
+	pre := map[string]string{"statsd.percentiles": "-75"}
+	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 	sd.Timers["time"] = []float64{0, 1, 2, 3}
 	now := int64(1418052649)
 	var buffer bytes.Buffer
-	num := sd.ProcessTimers(&buffer, now, Percentiles{
-		&Percentile{
-			-75,
-			"-75",
-		},
-	})
+	num := sd.ProcessTimers(&buffer, now)
 
 	lines := bytes.Split(buffer.Bytes(), []byte("\n"))
 
@@ -418,7 +390,7 @@ func TestStatsDaemonParseLine(t *testing.T) {
 func TestStatsDaemonFanOutCounters(t *testing.T) {
 	cfg := NewCfg()
 	qchan := qtypes.NewQChan()
-	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	sd := NewNamedStatsdaemon("statsd", cfg, qchan)
 	qchan.Broadcast()
 	dc := qchan.Data.Join()
 	sd.ParseLine("gorets:100|c")
@@ -483,10 +455,10 @@ func TestStatsDaemonFanOutGauges(t *testing.T) {
 }
 
 func TestStatsDaemonFanOutGaugesDelete(t *testing.T) {
-	pre := map[string]string{"delete-gauges": "true"}
+	pre := map[string]string{"statsd.delete-gauges": "true"}
 	cfg := NewPreCfg(pre)
 	qchan := qtypes.NewQChan()
-	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	sd := NewNamedStatsdaemon("statsd", cfg, qchan)
 	qchan.Broadcast()
 	dc := qchan.Data.Join()
 	sd.ParseLine("testGauge:100|g")
@@ -515,6 +487,185 @@ func TestStatsDaemonFanOutGaugesDelete(t *testing.T) {
 		t.Fatal("metrics receive timeout")
 	}
 }
+
+func TestStatsDaemonFanOutSets(t *testing.T) {
+	cfg := NewCfg()
+	qchan := qtypes.NewQChan()
+	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	qchan.Broadcast()
+	dc := qchan.Data.Join()
+	sd.ParseLine("testSet:100|s")
+	assert.Equal(t, 1, len(sd.Sets["testSet"]))
+	assert.Equal(t, "100", sd.Sets["testSet"][0])
+
+	now := time.Unix(1495028544, 0)
+	sd.FanOutSets(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(1), met.Value)
+		assert.Equal(t, "testSet", met.Name)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
+	sd.ParseLine("testSet:100|s")
+	sd.ParseLine("testSet:200|s")
+	assert.Equal(t, 2, len(sd.Sets["testSet"]))
+	assert.Equal(t, "200", sd.Sets["testSet"][1])
+	sd.FanOutSets(now)
+	select {
+	case val := <- dc.Read:
+		assert.IsType(t, qtypes.Metric{}, val)
+		met := val.(qtypes.Metric)
+		assert.Equal(t, float64(2), met.Value)
+		assert.Equal(t, "testSet", met.Name)
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("metrics receive timeout")
+	}
+}
+
+func TestStatsDaemonFanOutTimers(t *testing.T) {
+	cfg := NewCfg()
+	qchan := qtypes.NewQChan()
+	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	qchan.Broadcast()
+	dc := qchan.Data.Join()
+	sd.ParseLine("testTimer:100|ms")
+	assert.Equal(t, float64(100), sd.Timers["testTimer"][0])
+	now := time.Unix(1495028544, 0)
+	sd.FanOutTimers(now)
+	exp := map[string]float64{
+		"testTimer.upper": 100.0,
+		"testTimer.lower": 100.0,
+		"testTimer.mean": 100.0,
+		"testTimer.count": 1.0,
+	}
+	tr := NewTimerResult(exp)
+	for {
+		select {
+		case val := <-dc.Read:
+			assert.IsType(t, qtypes.Metric{}, val)
+			met := val.(qtypes.Metric)
+			tr.Input(met.Name, met.Value)
+		case <-time.After(1500 * time.Millisecond):
+			t.Fatal("timeout")
+		}
+		if tr.Check() {
+			break
+		}
+	}
+	sd.ParseLine("testTimer:100|ms")
+	sd.ParseLine("testTimer:200|ms")
+	sd.FanOutTimers(now)
+	exp = map[string]float64{
+		"testTimer.upper": 200.0,
+		"testTimer.lower": 100.0,
+		"testTimer.mean": 150.0,
+		"testTimer.count": 2.0,
+	}
+	tr = NewTimerResult(exp)
+	for {
+		select {
+		case val := <-dc.Read:
+			assert.IsType(t, qtypes.Metric{}, val)
+			met := val.(qtypes.Metric)
+			tr.Input(met.Name, met.Value)
+		case <-time.After(1500 * time.Millisecond):
+			t.Fatal("timeout")
+		}
+		if tr.Check() {
+			break
+		}
+	}
+}
+
+func TestStatsDaemonFanOutTimersPercentiles(t *testing.T) {
+	pre := map[string]string{"statsd.percentiles": "90"}
+	cfg := NewPreCfg(pre)
+	qchan := qtypes.NewQChan()
+	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	now := time.Unix(1495028544, 0)
+	qchan.Broadcast()
+	dc := qchan.Data.Join()
+	sd.ParseLine("testTimer:100|ms")
+	sd.ParseLine("testTimer:200|ms")
+	sd.FanOutTimers(now)
+	exp := map[string]float64{
+		"testTimer.upper": 200.0,
+		"testTimer.upper_90": 200.0,
+		"testTimer.lower": 100.0,
+		"testTimer.mean": 150.0,
+		"testTimer.count": 2.0,
+	}
+	tr := NewTimerResult(exp)
+	for {
+		select {
+		case val := <-dc.Read:
+			assert.IsType(t, qtypes.Metric{}, val)
+			met := val.(qtypes.Metric)
+			tr.Input(met.Name, met.Value)
+		case <-time.After(1500 * time.Millisecond):
+			t.Fatal("timeout")
+		}
+		if tr.Check() {
+			break
+		}
+	}
+}
+
+func TestStatsDaemonFanOutTimersMorePercentiles(t *testing.T) {
+	pre := map[string]string{
+		"statsd.percentiles": "50,90,95,99",
+	}
+	cfg := NewPreCfg(pre)
+	qchan := qtypes.NewQChan()
+	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	now := time.Unix(1495028544, 0)
+	qchan.Broadcast()
+	dc := qchan.Data.Join()
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:80|ms")
+	sd.ParseLine("testTimer:100|ms")
+	sd.ParseLine("testTimer:100|ms")
+	sd.ParseLine("testTimer:100|ms")
+	sd.ParseLine("testTimer:100|ms")
+	sd.ParseLine("testTimer:100|ms")
+	sd.ParseLine("testTimer:200|ms")
+	sd.FanOutTimers(now)
+	exp := map[string]float64{
+		"testTimer.upper": 200.0,
+		"testTimer.upper_50": 80.0,
+		"testTimer.upper_90": 100.0,
+		"testTimer.upper_95": 100.0,
+		"testTimer.upper_99": 200.0,
+		"testTimer.lower": 80.0,
+		"testTimer.mean": 95.71428571428571,
+		"testTimer.count": 14.0,
+	}
+	tr := NewTimerResult(exp)
+	for {
+		select {
+		case val := <-dc.Read:
+			assert.IsType(t, qtypes.Metric{}, val)
+			met := val.(qtypes.Metric)
+			tr.Input(met.Name, met.Value)
+		case <-time.After(1500 * time.Millisecond):
+			fmt.Printf(tr.Result())
+			t.Fatal("timeout")
+		}
+		if tr.Check() {
+			break
+		}
+	}
+}
+
 
 /*
 func TestMultipleUDPSends(t *testing.T) {
@@ -609,7 +760,8 @@ func BenchmarkManyDifferentSensors(t *testing.B) {
 */
 
 func BenchmarkOneBigTimer(t *testing.B) {
-	cfg := NewCfg()
+	pre := map[string]string{"statsd.percentiles": "99"}
+	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 
 	r := rand.New(rand.NewSource(438))
@@ -621,11 +773,12 @@ func BenchmarkOneBigTimer(t *testing.B) {
 
 	var buff bytes.Buffer
 	t.ResetTimer()
-	sd.ProcessTimers(&buff, time.Now().Unix(), commonPercentiles)
+	sd.ProcessTimers(&buff, time.Now().Unix())
 }
 
 func BenchmarkLotsOfTimers(t *testing.B) {
-	cfg := NewCfg()
+	pre := map[string]string{"statsd.percentiles": "99"}
+	cfg := NewPreCfg(pre)
 	sd := NewStatsdaemon(cfg)
 
 	r := rand.New(rand.NewSource(438))
@@ -639,7 +792,7 @@ func BenchmarkLotsOfTimers(t *testing.B) {
 
 	var buff bytes.Buffer
 	t.ResetTimer()
-	sd.ProcessTimers(&buff, time.Now().Unix(), commonPercentiles)
+	sd.ProcessTimers(&buff, time.Now().Unix())
 }
 
 func BenchmarkParseLineCounter(b *testing.B) {

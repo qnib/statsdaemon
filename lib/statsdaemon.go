@@ -37,13 +37,18 @@ type StatsDaemon struct {
 	Sets 			map[string][]string
 	ReceiveCounter	string
 	QChan			qtypes.QChan
+	Percentiles		Percentiles
 
 
 }
 
 func NewStatsdaemon(cfg *config.Config) StatsDaemon {
+	return NewNamedStatsdaemon("statsd", cfg, qtypes.NewQChan())
+}
+
+func NewNamedStatsdaemon(name string, cfg *config.Config, qchan qtypes.QChan) StatsDaemon {
 	sd := StatsDaemon{
-		Name:				"statsd",
+		Name:				name,
 		Parser: 			MsgParser{debug: true},
 		Signalchan: 		make(chan os.Signal, 1),
 		Cfg: 				cfg,
@@ -53,16 +58,15 @@ func NewStatsdaemon(cfg *config.Config) StatsDaemon {
 		Timers:          	make(map[string]Float64Slice),
 		CountInactivity:	make(map[string]int64),
 		Sets:   			make(map[string][]string),
+		Percentiles: 		Percentiles{},
+		QChan:				qchan,
 	}
-	sd.ReceiveCounter, _ = sd.Cfg.StringOr("receive-counter", "")
-	return sd
 
-}
-
-func NewNamedStatsdaemon(name string, cfg *config.Config, qchan qtypes.QChan) StatsDaemon {
-	sd := NewStatsdaemon(cfg)
-	sd.Name = name
-	sd.QChan = qchan
+	sd.ReceiveCounter = sd.StringOr("receive-counter", "")
+	sd.Log("info", fmt.Sprintf("Pctls: %s", sd.StringOr("percentiles", "")))
+	for _, pctl := range strings.Split(sd.StringOr("percentiles", ""), ",") {
+		sd.Percentiles.Set(pctl)
+	}
 	return sd
 }
 
@@ -78,7 +82,8 @@ func (sd *StatsDaemon) Log(logLevel, msg string) {
 }
 
 func (sd *StatsDaemon) StringOr(path, alt string) string {
-	res, err := sd.Cfg.String(path)
+	fPath := fmt.Sprintf("%s.%s", sd.Name, path)
+	res, err := sd.Cfg.String(fPath)
 	if err != nil {
 		res = alt
 	}
@@ -94,7 +99,7 @@ func (sd *StatsDaemon) Bool(path string) bool {
 }
 
 func (sd *StatsDaemon) BoolOr(path string, alt bool) bool {
-	res, err := sd.Cfg.Bool(path)
+	res, err := sd.Cfg.Bool(fmt.Sprintf("%s.%s", sd.Name, path))
 	if err != nil {
 		res = alt
 	}
@@ -102,7 +107,7 @@ func (sd *StatsDaemon) BoolOr(path string, alt bool) bool {
 }
 
 func (sd *StatsDaemon) IntOr(path string, alt int) int {
-	res, err := sd.Cfg.Int(path)
+	res, err := sd.Cfg.Int(fmt.Sprintf("%s.%s", sd.Name, path))
 	if err != nil {
 		res = alt
 	}
@@ -175,6 +180,7 @@ func (sd *StatsDaemon) ParseTo(conn io.ReadCloser, partialReads bool) {
 
 func (sd *StatsDaemon) LoopChannel() {
 	tickMs := sd.IntOr("send-metric-ms", 1000)
+	sd.Log("info", fmt.Sprintf("Statsdaemon ticker: %dms", tickMs))
 	ticker := time.NewTicker(time.Duration(tickMs)*time.Millisecond).C
 	for {
 		select {
@@ -264,6 +270,9 @@ func (sd *StatsDaemon) FanOutMetrics() {
 	now := time.Now()
 	sd.FanOutCounters(now)
 	sd.FanOutGauges(now)
+	sd.FanOutSets(now)
+	sd.FanOutTimers(now)
+
 }
 
 func (sd *StatsDaemon) ParseLine(msg string) (err error) {
@@ -277,8 +286,6 @@ func (sd *StatsDaemon) FanOutCounters(now time.Time) int64 {
 	// continue sending zeros for counters for a short period of time even if we have no new data
 	dims := map[string]string{}
 	for bucket, value := range sd.Counters {
-		msg := fmt.Sprintf("Create NewExt(%s, %s, %s, %v, %v, %v)", sd.Name, bucket, qtypes.Counter, value, dims, now)
-		sd.Log("info", msg)
 		m := qtypes.NewExt(sd.Name, bucket, qtypes.Counter, value, dims, now, false)
 		sd.QChan.Data.Send(m)
 		delete(sd.Counters, bucket)
@@ -311,6 +318,90 @@ func (sd *StatsDaemon) FanOutGauges(now time.Time) int64 {
 		}
 	}
 	return num
+}
+
+func (sd *StatsDaemon) FanOutSets(now time.Time) int64 {
+	dims := map[string]string{}
+	num := int64(len(sd.Sets))
+	for bucket, set := range sd.Sets {
+		uniqueSet := map[string]bool{}
+		for _, str := range set {
+			uniqueSet[str] = true
+		}
+		m := qtypes.NewExt(sd.Name, bucket, qtypes.Gauge, float64(len(uniqueSet)), dims, now, false)
+		sd.QChan.Data.Send(m)
+		delete(sd.Sets, bucket)
+	}
+	return num
+}
+
+func (sd *StatsDaemon) FanOutTimers(now time.Time) int64 {
+	var num int64
+	dims := map[string]string{}
+	postfix := sd.String("postfix")
+	for bucket, timer := range sd.Timers {
+		bucketWithoutPostfix := bucket[:len(bucket)-len(postfix)]
+		num++
+
+		sort.Sort(timer)
+		min := timer[0]
+		max := timer[len(timer)-1]
+		maxAtThreshold := max
+		count := len(timer)
+
+		sum := float64(0)
+		for _, value := range timer {
+			sum += value
+		}
+		mean := sum / float64(len(timer))
+
+		for _, pct := range sd.Percentiles {
+			if len(timer) > 1 {
+				var abs float64
+				if pct.float >= 0 {
+					abs = pct.float
+				} else {
+					abs = 100 + pct.float
+				}
+				// poor man's math.Round(x):
+				// math.Floor(x + 0.5)
+				indexOfPerc := int(math.Floor(((abs / 100.0) * float64(count)) + 0.5))
+				if pct.float >= 0 {
+					indexOfPerc -= 1 // index offset=0
+				}
+				maxAtThreshold = timer[indexOfPerc]
+			}
+
+			var name string
+			if pct.float >= 0 {
+				name = fmt.Sprintf("%s.upper_%s%s", bucketWithoutPostfix, pct.str, postfix )
+			} else {
+				name = fmt.Sprintf("%s.lower_%s%s", bucketWithoutPostfix, pct.str[1:], postfix )
+			}
+			m := qtypes.NewExt(sd.Name, name, qtypes.Gauge, maxAtThreshold, dims, now, false)
+			sd.sendMetric(m)
+		}
+
+		name := fmt.Sprintf("%s.mean%s", bucketWithoutPostfix, postfix)
+		m := qtypes.NewExt(sd.Name, name, qtypes.Gauge, mean, dims, now, false)
+		sd.sendMetric(m)
+		name = fmt.Sprintf("%s.upper%s", bucketWithoutPostfix, postfix)
+		m = qtypes.NewExt(sd.Name, name, qtypes.Gauge, max, dims, now, false)
+		sd.sendMetric(m)
+		name = fmt.Sprintf("%s.lower%s", bucketWithoutPostfix, postfix)
+		m = qtypes.NewExt(sd.Name, name, qtypes.Gauge, min, dims, now, false)
+		sd.sendMetric(m)
+		name = fmt.Sprintf("%s.count%s", bucketWithoutPostfix, postfix)
+		m = qtypes.NewExt(sd.Name, name, qtypes.Gauge, float64(count), dims, now, false)
+		sd.sendMetric(m)
+		delete(sd.Timers, bucket)
+	}
+	return num
+}
+
+func (sd *StatsDaemon) sendMetric(m qtypes.Metric) {
+	sd.Log("debug", m.ToOpenTSDB())
+	sd.QChan.Data.Send(m)
 }
 
 func sanitizeBucket(bucket string) string {
@@ -351,7 +442,7 @@ func (sd *StatsDaemon) submit(deadline time.Time) (err error) {
 			log.Printf("WARNING: resetting counters when in debug mode")
 			sd.ProcessCounters(&buffer, now)
 			sd.ProcessGauges(&buffer, now)
-			//sd.ProcessTimers(&buffer, now, percentThreshold)
+			sd.ProcessTimers(&buffer, now)
 			sd.ProcessSets(&buffer, now)
 		}
 		errmsg := fmt.Sprintf("dialing %s failed - %s", graphiteAddress, err)
@@ -366,7 +457,7 @@ func (sd *StatsDaemon) submit(deadline time.Time) (err error) {
 
 	num += sd.ProcessCounters(&buffer, now)
 	num += sd.ProcessGauges(&buffer, now)
-	//num += processTimers(&buffer, now, percentThreshold)
+	num += sd.ProcessTimers(&buffer, now)
 	num += sd.ProcessSets(&buffer, now)
 	if num == 0 {
 		return nil
@@ -442,7 +533,7 @@ func (sd *StatsDaemon) ProcessSets(buffer *bytes.Buffer, now int64) int64 {
 	return num
 }
 
-func (sd *StatsDaemon) ProcessTimers(buffer *bytes.Buffer, now int64, pctls Percentiles) int64 {
+func (sd *StatsDaemon) ProcessTimers(buffer *bytes.Buffer, now int64) int64 {
 	var num int64
 	postfix := sd.String("postfix")
 	for bucket, timer := range sd.Timers {
@@ -461,7 +552,7 @@ func (sd *StatsDaemon) ProcessTimers(buffer *bytes.Buffer, now int64, pctls Perc
 		}
 		mean := sum / float64(len(timer))
 
-		for _, pct := range pctls {
+		for _, pct := range sd.Percentiles {
 			if len(timer) > 1 {
 				var abs float64
 				if pct.float >= 0 {

@@ -12,7 +12,7 @@ const (
 )
 
 func Run(ctx *cli.Context) {
-	cfg := config.NewYAMLFile(ctx.String("config")
+	cfg := config.NewYAMLFile(ctx.String("config"))
 	sd := statsdaemon.NewStatsdaemon(cfg)
 	sd.Run()
 }
