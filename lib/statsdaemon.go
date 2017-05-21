@@ -214,6 +214,58 @@ func (sd *StatsDaemon) monitor() {
 	}
 }
 
+func (sd *StatsDaemon) HandlerStatsdPacket(sp *qtypes.StatsdPacket) {
+	if sd.ReceiveCounter != "" {
+		v, ok := sd.Counters[sd.ReceiveCounter]
+		if !ok || v < 0 {
+			sd.Counters[sd.ReceiveCounter] = 0
+		}
+		sd.Counters[sd.ReceiveCounter] += 1
+	}
+
+	switch sp.Modifier {
+	case "ms":
+		_, ok := sd.Timers[sp.Bucket]
+		if !ok {
+			var t Float64Slice
+			sd.Timers[sp.Bucket] = t
+		}
+		sd.Timers[sp.Bucket] = append(sd.Timers[sp.Bucket], sp.ValFlt)
+	case "g":
+		gaugeValue, _ := sd.Gauges[sp.Bucket]
+		if sp.ValStr == "" {
+			gaugeValue = sp.ValFlt
+		} else if sp.ValStr == "+" {
+			// watch out for overflows
+			if sp.ValFlt > (math.MaxFloat64 - gaugeValue) {
+				gaugeValue = math.MaxFloat64
+			} else {
+				gaugeValue += sp.ValFlt
+			}
+		} else if sp.ValStr == "-" {
+			// subtract checking for negative numbers
+			if sp.ValFlt > gaugeValue {
+				gaugeValue = 0
+			} else {
+				gaugeValue -= sp.ValFlt
+			}
+		}
+		sd.Gauges[sp.Bucket] = gaugeValue
+	case "c":
+		_, ok := sd.Counters[sp.Bucket]
+		if !ok {
+			sd.Counters[sp.Bucket] = 0
+		}
+		sd.Counters[sp.Bucket] += sp.ValFlt * float64(1/sp.Sampling)
+	case "s":
+		_, ok := sd.Sets[sp.Bucket]
+		if !ok {
+			sd.Sets[sp.Bucket] = make([]string, 0)
+		}
+		sd.Sets[sp.Bucket] = append(sd.Sets[sp.Bucket], sp.ValStr)
+	}
+}
+
 func (sd *StatsDaemon) packetHandler(s *Packet) {
 	if sd.ReceiveCounter != "" {
 		v, ok := sd.Counters[sd.ReceiveCounter]
