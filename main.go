@@ -4,7 +4,7 @@ import (
 	"os"
 	"github.com/codegangsta/cli"
 	"github.com/zpatrick/go-config"
-	"github.com/ChristianKniep/statsdaemon/lib"
+	"github.com/qnib/statsdaemon/lib"
 )
 
 const (

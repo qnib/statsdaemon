@@ -584,7 +584,7 @@ func TestStatsDaemonFanOutTimersPercentiles(t *testing.T) {
 	pre := map[string]string{"statsd.percentiles": "90"}
 	cfg := NewPreCfg(pre)
 	qchan := qtypes.NewQChan()
-	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	sd := NewNamedStatsdaemon("statsd", cfg, qchan)
 	now := time.Unix(1495028544, 0)
 	qchan.Broadcast()
 	dc := qchan.Data.Join()
@@ -606,6 +606,7 @@ func TestStatsDaemonFanOutTimersPercentiles(t *testing.T) {
 			met := val.(qtypes.Metric)
 			tr.Input(met.Name, met.Value)
 		case <-time.After(1500 * time.Millisecond):
+			fmt.Println(tr.Result())
 			t.Fatal("timeout")
 		}
 		if tr.Check() {
@@ -620,7 +621,7 @@ func TestStatsDaemonFanOutTimersMorePercentiles(t *testing.T) {
 	}
 	cfg := NewPreCfg(pre)
 	qchan := qtypes.NewQChan()
-	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	sd := NewNamedStatsdaemon("statsd", cfg, qchan)
 	now := time.Unix(1495028544, 0)
 	qchan.Broadcast()
 	dc := qchan.Data.Join()
