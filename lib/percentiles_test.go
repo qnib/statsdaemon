@@ -1,8 +1,8 @@
 package statsdaemon
 
 import (
-	"testing"
 	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 func TestPercentiles_Set(t *testing.T) {
@@ -18,7 +18,7 @@ func TestPercentiles_Set(t *testing.T) {
 func TestPercentile_Sring(t *testing.T) {
 	p := Percentile{
 		float: 90,
-		str: "90",
+		str:   "90",
 	}
 	assert.Equal(t, "90", p.String())
 }

@@ -1,15 +1,15 @@
 package statsdaemon
 
 import (
-	"testing"
 	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 func TestTimerResult(t *testing.T) {
 	exp := map[string]float64{
 		"test.upper": 10.0,
 		"test.lower": 0.0,
-		"test.mean": 5.0,
+		"test.mean":  5.0,
 		"test.count": 2.0,
 	}
 	tr := NewTimerResult(exp)
@@ -20,12 +20,11 @@ func TestTimerResult(t *testing.T) {
 	assert.True(t, tr.Check())
 }
 
-
 func TestTimerResultMissed(t *testing.T) {
 	exp := map[string]float64{
 		"test.upper": 10.0,
 		"test.lower": 0.0,
-		"test.mean": 5.0,
+		"test.mean":  5.0,
 		"test.count": 2.0,
 	}
 	tr := NewTimerResult(exp)
@@ -39,7 +38,7 @@ func TestTimerResultNok(t *testing.T) {
 	exp := map[string]float64{
 		"test.upper": 10.0,
 		"test.lower": 0.0,
-		"test.mean": 5.0,
+		"test.mean":  5.0,
 		"test.count": 1.0,
 	}
 	tr := NewTimerResult(exp)

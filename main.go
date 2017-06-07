@@ -12,7 +12,13 @@ const (
 )
 
 func Run(ctx *cli.Context) {
-	cfg := config.NewYAMLFile(ctx.String("config"))
+
+
+	cfg := config.NewConfig(
+		[]config.Provider{
+			config.NewCLI(ctx, false),
+		},
+	)
 	sd := statsdaemon.NewStatsdaemon(cfg)
 	sd.Run()
 }
@@ -40,6 +46,11 @@ func main() {
 		},
 		cli.StringFlag{
 			Name:  "graphite",
+			Value: "127.0.0.1:2003",
+			Usage: "Graphite service address (or - to disable)",
+		},
+		cli.StringFlag{
+			Name:  "influxdb",
 			Value: "127.0.0.1:2003",
 			Usage: "Graphite service address (or - to disable)",
 		},

@@ -1,9 +1,10 @@
 package statsdaemon
 
 import (
-	"testing"
-	"github.com/stretchr/testify/assert"
 	"bytes"
+	"github.com/stretchr/testify/assert"
+	"testing"
+	"github.com/qnib/qframe-types"
 )
 
 func NewMP() MsgParser {
@@ -318,4 +319,71 @@ func TestMultiLine(t *testing.T) {
 	assert.Equal(t, "", packet.ValStr)
 	assert.Equal(t, "g", packet.Modifier)
 	assert.Equal(t, float32(1), packet.Sampling)
+}
+
+/*************** New StatsdPackets
+ */
+
+func TestParseLineSdPktGauge(t *testing.T) {
+	mp := MsgParser{
+		debug: true,
+	}
+	d := []byte("gaugor:333|g")
+	sp := mp.parseLineSdPkt(d)
+	assert.NotEqual(t, sp, nil)
+	assert.Equal(t, "gaugor", sp.Bucket)
+	assert.Equal(t, float64(333), sp.ValFlt)
+	assert.Equal(t, "", sp.ValStr)
+	assert.Equal(t, "g", sp.Modifier)
+	assert.Equal(t, float32(1), sp.Sampling)
+
+
+	dims := qtypes.NewDimensionsPre(map[string]string{"key1":"val1"})
+	d = []byte("gaugor:333|g key1=val1")
+	sp = mp.parseLineSdPkt(d)
+	assert.Equal(t, dims, sp.Dimensions)
+
+	dims.Add("key2", "val2")
+	d = []byte("gaugor:333|g key1=val1,key2=val2")
+	sp = mp.parseLineSdPkt(d)
+	assert.Equal(t, dims, sp.Dimensions)
+
+
+	d = []byte("gaugor:-10|g")
+	sp = mp.parseLineSdPkt(d)
+	assert.NotEqual(t, sp, nil)
+	assert.Equal(t, "gaugor", sp.Bucket)
+	assert.Equal(t, float64(10), sp.ValFlt)
+	assert.Equal(t, "-", sp.ValStr)
+	assert.Equal(t, "g", sp.Modifier)
+	assert.Equal(t, float32(1), sp.Sampling)
+
+	d = []byte("gaugor:+4|g")
+	sp = mp.parseLineSdPkt(d)
+	assert.NotEqual(t, sp, nil)
+	assert.Equal(t, "gaugor", sp.Bucket)
+	assert.Equal(t, float64(4), sp.ValFlt)
+	assert.Equal(t, "+", sp.ValStr)
+	assert.Equal(t, "g", sp.Modifier)
+	assert.Equal(t, float32(1), sp.Sampling)
+
+	// >max(int64) && <max(uint64)
+	d = []byte("gaugor:18446744073709551606|g")
+	sp = mp.parseLineSdPkt(d)
+	assert.NotEqual(t, sp, nil)
+	assert.Equal(t, "gaugor", sp.Bucket)
+	assert.Equal(t, float64(18446744073709551606), sp.ValFlt)
+	assert.Equal(t, "", sp.ValStr)
+	assert.Equal(t, "g", sp.Modifier)
+	assert.Equal(t, float32(1), sp.Sampling)
+
+	// float values
+	d = []byte("gaugor:3.3333|g")
+	sp = mp.parseLineSdPkt(d)
+	assert.NotEqual(t, sp, nil)
+	assert.Equal(t, "gaugor", sp.Bucket)
+	assert.Equal(t, float64(3.3333), sp.ValFlt)
+	assert.Equal(t, "", sp.ValStr)
+	assert.Equal(t, "g", sp.Modifier)
+	assert.Equal(t, float32(1), sp.Sampling)
 }

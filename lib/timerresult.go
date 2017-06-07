@@ -6,8 +6,8 @@ import (
 )
 
 type TimerResult struct {
-	TestsGot 	map[string]string
-	TestsExp 	map[string]float64
+	TestsGot map[string]string
+	TestsExp map[string]float64
 }
 
 func NewTimerResult(exp map[string]float64) TimerResult {
@@ -22,7 +22,7 @@ func NewTimerResult(exp map[string]float64) TimerResult {
 }
 
 func (tr *TimerResult) Input(name string, value float64) {
-	if v, ok := tr.TestsExp[name] ; ok {
+	if v, ok := tr.TestsExp[name]; ok {
 		if value == v {
 			tr.TestsGot[name] = "ok"
 		} else {
@@ -33,12 +33,12 @@ func (tr *TimerResult) Input(name string, value float64) {
 
 func (tr *TimerResult) Check() bool {
 	nok := false
-	for _,v := range tr.TestsGot {
+	for _, v := range tr.TestsGot {
 		if v != "ok" {
 			nok = true
 		}
 	}
-	return 	! nok
+	return !nok
 }
 
 func (tr *TimerResult) Result() string {

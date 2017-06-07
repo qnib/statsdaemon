@@ -1,19 +1,19 @@
 package statsdaemon
 
 import (
-	"math/rand"
-	"strconv"
-	"time"
 	"bytes"
 	"flag"
 	"fmt"
 	"math"
+	"math/rand"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/zpatrick/go-config"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/qnib/qframe-types"
+	"github.com/stretchr/testify/assert"
 )
 
 func NewCfg() *config.Config {
@@ -22,14 +22,14 @@ func NewCfg() *config.Config {
 
 func NewPreCfg(pre map[string]string) *config.Config {
 	cfgMap := map[string]string{
-		"log.level": "info",
-		"statsd.test": "0",
-		"statsd.address": ":8125",
-		"statsd.debug": "false",
-		"statsd.resent-gauges": "false",
+		"log.level":                 "info",
+		"statsd.test":               "0",
+		"statsd.address":            ":8125",
+		"statsd.debug":              "false",
+		"statsd.resent-gauges":      "false",
 		"statsd.persist-count-keys": "60",
 	}
-	for k,v := range pre {
+	for k, v := range pre {
 		cfgMap[k] = v
 	}
 	cfg := config.NewConfig(
@@ -334,7 +334,7 @@ func TestProcessTimersUpperPercentile(t *testing.T) {
 
 func TestProcessTimersUpperPercentilePostfix(t *testing.T) {
 	pre := map[string]string{
-		"statsd.postfix": ".test",
+		"statsd.postfix":     ".test",
 		"statsd.percentiles": "75",
 	}
 	cfg := NewPreCfg(pre)
@@ -398,7 +398,7 @@ func TestStatsDaemonFanOutCounters(t *testing.T) {
 	now := time.Unix(1495028544, 0)
 	sd.FanOutCounters(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(103), met.Value)
@@ -408,7 +408,7 @@ func TestStatsDaemonFanOutCounters(t *testing.T) {
 	}
 	sd.FanOutCounters(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(0), met.Value)
@@ -422,15 +422,16 @@ func TestStatsDaemonFanOutCounters(t *testing.T) {
 func TestStatsDaemonFanOutGauges(t *testing.T) {
 	cfg := NewCfg()
 	qchan := qtypes.NewQChan()
-	sd := NewNamedStatsdaemon("test", cfg, qchan)
+	sd := NewNamedStatsdaemon("statsd", cfg, qchan)
 	qchan.Broadcast()
 	dc := qchan.Data.Join()
-	sd.ParseLine("testGauge:100|g")
-	assert.Equal(t, float64(100), sd.Gauges["testGauge"])
+	sd.ParseLineSdPkt("testGauge:100|g")
+	gid := GenID("testGauge")
+	assert.Equal(t, float64(100), sd.Gauges[gid])
 	now := time.Unix(1495028544, 0)
 	sd.FanOutGauges(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(100), met.Value)
@@ -438,11 +439,11 @@ func TestStatsDaemonFanOutGauges(t *testing.T) {
 	case <-time.After(1500 * time.Millisecond):
 		t.Fatal("metrics receive timeout")
 	}
-	sd.ParseLine("testGauge:-50|g")
-	assert.Equal(t, float64(50), sd.Gauges["testGauge"])
+	sd.ParseLineSdPkt("testGauge:-50|g")
+	assert.Equal(t, float64(50), sd.Gauges[gid])
 	sd.FanOutGauges(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(50), met.Value)
@@ -450,8 +451,10 @@ func TestStatsDaemonFanOutGauges(t *testing.T) {
 	case <-time.After(1500 * time.Millisecond):
 		t.Fatal("metrics receive timeout")
 	}
-	sd.ParseLine("testGauge:+10|g")
-	assert.Equal(t, float64(60), sd.Gauges["testGauge"])
+	sd.ParseLineSdPkt("testGauge:10|g")
+	assert.Equal(t, float64(10), sd.Gauges[gid])
+	sd.ParseLineSdPkt("testGauge:+10|g")
+	assert.Equal(t, float64(20), sd.Gauges[gid])
 }
 
 func TestStatsDaemonFanOutGaugesDelete(t *testing.T) {
@@ -461,12 +464,13 @@ func TestStatsDaemonFanOutGaugesDelete(t *testing.T) {
 	sd := NewNamedStatsdaemon("statsd", cfg, qchan)
 	qchan.Broadcast()
 	dc := qchan.Data.Join()
-	sd.ParseLine("testGauge:100|g")
-	assert.Equal(t, float64(100), sd.Gauges["testGauge"])
+	sd.ParseLineSdPkt("testGauge:100|g")
+	gid := GenID("testGauge")
+	assert.Equal(t, float64(100), sd.Gauges[gid])
 	now := time.Unix(1495028544, 0)
 	sd.FanOutGauges(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(100), met.Value)
@@ -474,11 +478,11 @@ func TestStatsDaemonFanOutGaugesDelete(t *testing.T) {
 	case <-time.After(1500 * time.Millisecond):
 		t.Fatal("metrics receive timeout")
 	}
-	sd.ParseLine("testGauge:-50|g")
-	assert.Equal(t, float64(0), sd.Gauges["testGauge"])
+	sd.ParseLineSdPkt("testGauge:-50|g")
+	assert.Equal(t, float64(0), sd.Gauges[gid])
 	sd.FanOutGauges(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(0), met.Value)
@@ -501,7 +505,7 @@ func TestStatsDaemonFanOutSets(t *testing.T) {
 	now := time.Unix(1495028544, 0)
 	sd.FanOutSets(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(1), met.Value)
@@ -515,7 +519,7 @@ func TestStatsDaemonFanOutSets(t *testing.T) {
 	assert.Equal(t, "200", sd.Sets["testSet"][1])
 	sd.FanOutSets(now)
 	select {
-	case val := <- dc.Read:
+	case val := <-dc.Read:
 		assert.IsType(t, qtypes.Metric{}, val)
 		met := val.(qtypes.Metric)
 		assert.Equal(t, float64(2), met.Value)
@@ -538,7 +542,7 @@ func TestStatsDaemonFanOutTimers(t *testing.T) {
 	exp := map[string]float64{
 		"testTimer.upper": 100.0,
 		"testTimer.lower": 100.0,
-		"testTimer.mean": 100.0,
+		"testTimer.mean":  100.0,
 		"testTimer.count": 1.0,
 	}
 	tr := NewTimerResult(exp)
@@ -561,7 +565,7 @@ func TestStatsDaemonFanOutTimers(t *testing.T) {
 	exp = map[string]float64{
 		"testTimer.upper": 200.0,
 		"testTimer.lower": 100.0,
-		"testTimer.mean": 150.0,
+		"testTimer.mean":  150.0,
 		"testTimer.count": 2.0,
 	}
 	tr = NewTimerResult(exp)
@@ -592,11 +596,11 @@ func TestStatsDaemonFanOutTimersPercentiles(t *testing.T) {
 	sd.ParseLine("testTimer:200|ms")
 	sd.FanOutTimers(now)
 	exp := map[string]float64{
-		"testTimer.upper": 200.0,
+		"testTimer.upper":    200.0,
 		"testTimer.upper_90": 200.0,
-		"testTimer.lower": 100.0,
-		"testTimer.mean": 150.0,
-		"testTimer.count": 2.0,
+		"testTimer.lower":    100.0,
+		"testTimer.mean":     150.0,
+		"testTimer.count":    2.0,
 	}
 	tr := NewTimerResult(exp)
 	for {
@@ -641,14 +645,14 @@ func TestStatsDaemonFanOutTimersMorePercentiles(t *testing.T) {
 	sd.ParseLine("testTimer:200|ms")
 	sd.FanOutTimers(now)
 	exp := map[string]float64{
-		"testTimer.upper": 200.0,
+		"testTimer.upper":    200.0,
 		"testTimer.upper_50": 80.0,
 		"testTimer.upper_90": 100.0,
 		"testTimer.upper_95": 100.0,
 		"testTimer.upper_99": 200.0,
-		"testTimer.lower": 80.0,
-		"testTimer.mean": 95.71428571428571,
-		"testTimer.count": 14.0,
+		"testTimer.lower":    80.0,
+		"testTimer.mean":     95.71428571428571,
+		"testTimer.count":    14.0,
 	}
 	tr := NewTimerResult(exp)
 	for {
@@ -667,6 +671,86 @@ func TestStatsDaemonFanOutTimersMorePercentiles(t *testing.T) {
 	}
 }
 
+/******************* StatsdPackets
+Handling StatsdPackets*/
+
+func TestStatsdPacketHandlerGauge(t *testing.T) {
+	cfg := NewCfg()
+	sd := NewStatsdaemon(cfg)
+	sp := qtypes.NewStatsdPacket("gaugor", "333", "g")
+	sd.HandlerStatsdPacket(sp)
+	bkey := GenID("gaugor")
+	assert.Equal(t, sd.Gauges[bkey], float64(333))
+
+	// -10
+	sp.ValFlt = 10
+	sp.ValStr = "-"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(323))
+
+	// +4
+	sp.ValFlt = 4
+	sp.ValStr = "+"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(327))
+
+	// <0 overflow
+	sp.ValFlt = 10
+	sp.ValStr = ""
+	sd.HandlerStatsdPacket(sp)
+	sp.ValFlt = 20
+	sp.ValStr = "-"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(0))
+
+	// >MaxFloat64 overflow
+	sp.ValFlt = float64(math.MaxFloat64 - 10)
+	sp.ValStr = ""
+	sd.HandlerStatsdPacket(sp)
+	sp.ValFlt = 20
+	sp.ValStr = "+"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(math.MaxFloat64))
+}
+
+func TestStatsdPacketHandlerGaugeWithDims(t *testing.T) {
+	cfg := NewCfg()
+	sd := NewStatsdaemon(cfg)
+	sp := qtypes.NewStatsdPacketDims("gaugor", "333", "g", qtypes.NewDimensionsPre(map[string]string{"key1": "val1"}))
+	sd.HandlerStatsdPacket(sp)
+	bkey := GenID("gaugor_key1=val1")
+	assert.Equal(t, sd.Gauges[bkey], float64(333))
+
+	// -10
+	sp.ValFlt = 10
+	sp.ValStr = "-"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(323))
+
+	// +4
+	sp.ValFlt = 4
+	sp.ValStr = "+"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(327))
+
+	// <0 overflow
+	sp.ValFlt = 10
+	sp.ValStr = ""
+	sd.HandlerStatsdPacket(sp)
+	sp.ValFlt = 20
+	sp.ValStr = "-"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(0))
+
+	// >MaxFloat64 overflow
+	sp.ValFlt = float64(math.MaxFloat64 - 10)
+	sp.ValStr = ""
+	sd.HandlerStatsdPacket(sp)
+	sp.ValFlt = 20
+	sp.ValStr = "+"
+	sd.HandlerStatsdPacket(sp)
+	assert.Equal(t, sd.Gauges[bkey], float64(math.MaxFloat64))
+}
 
 /*
 func TestMultipleUDPSends(t *testing.T) {
@@ -898,4 +982,3 @@ func BenchmarkPacketHandlerSet(b *testing.B) {
 		sd.packetHandler(d2)
 	}
 }
-

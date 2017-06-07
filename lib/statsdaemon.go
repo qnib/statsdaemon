@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/qnib/qframe-types"
 	"github.com/zpatrick/go-config"
 	"io"
 	"log"
@@ -14,9 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"syscall"
-	"github.com/qnib/qframe-types"
+	"time"
 )
 
 const (
@@ -25,41 +25,41 @@ const (
 )
 
 type StatsDaemon struct {
-	Name			string
-	Parser			MsgParser
-	Signalchan 		chan os.Signal
-	Cfg   			*config.Config
-	In          	chan *Packet
-	Counters		map[string]float64
-	Gauges			map[string]float64
-	Timers			map[string]Float64Slice
-	CountInactivity	map[string]int64
-	Sets 			map[string][]string
-	ReceiveCounter	string
-	QChan			qtypes.QChan
-	Percentiles		Percentiles
-
-
+	Name            string
+	Parser          MsgParser
+	Signalchan      chan os.Signal
+	Cfg             *config.Config
+	In              chan *qtypes.StatsdPacket
+	Counters        map[string]float64
+	Gauges          map[string]float64
+	Timers          map[string]Float64Slice
+	CountInactivity map[string]int64
+	Sets            map[string][]string
+	ReceiveCounter  string
+	QChan           qtypes.QChan
+	Percentiles     Percentiles
+	BucketMapping   map[string]BucketID
 }
 
 func NewStatsdaemon(cfg *config.Config) StatsDaemon {
-	return NewNamedStatsdaemon("statsd", cfg, qtypes.NewQChan())
+	return NewNamedStatsdaemon("", cfg, qtypes.NewQChan())
 }
 
 func NewNamedStatsdaemon(name string, cfg *config.Config, qchan qtypes.QChan) StatsDaemon {
 	sd := StatsDaemon{
-		Name:				name,
-		Parser: 			MsgParser{debug: true},
-		Signalchan: 		make(chan os.Signal, 1),
-		Cfg: 				cfg,
-		In: 				make(chan *Packet, MAX_UNPROCESSED_PACKETS),
-		Counters: 			make(map[string]float64),
-		Gauges:          	make(map[string]float64),
-		Timers:          	make(map[string]Float64Slice),
-		CountInactivity:	make(map[string]int64),
-		Sets:   			make(map[string][]string),
-		Percentiles: 		Percentiles{},
-		QChan:				qchan,
+		Name:            name,
+		Parser:          MsgParser{debug: true},
+		Signalchan:      make(chan os.Signal, 1),
+		Cfg:             cfg,
+		In:              make(chan *qtypes.StatsdPacket, MAX_UNPROCESSED_PACKETS),
+		Counters:        make(map[string]float64),
+		Gauges:          make(map[string]float64),
+		Timers:          make(map[string]Float64Slice),
+		CountInactivity: make(map[string]int64),
+		Sets:            make(map[string][]string),
+		Percentiles:     Percentiles{},
+		QChan:           qchan,
+		BucketMapping:   map[string]BucketID{},
 	}
 
 	sd.ReceiveCounter = sd.StringOr("receive-counter", "")
@@ -74,16 +74,19 @@ func (sd *StatsDaemon) Log(logLevel, msg string) {
 	// TODO: Setup in each Log() invocation seems rude
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	dL, _ := sd.Cfg.StringOr("log.level", "info")
+	debug := sd.BoolOr("debug", false)
 	dI := qtypes.LogStrToInt(dL)
 	lI := qtypes.LogStrToInt(logLevel)
-	if dI >= lI {
+	if dI >= lI || debug {
 		log.Printf("[%+6s] %15s Name:%-10s >> %s", strings.ToUpper(logLevel), "statsdaemon", sd.Name, msg)
 	}
 }
 
 func (sd *StatsDaemon) StringOr(path, alt string) string {
-	fPath := fmt.Sprintf("%s.%s", sd.Name, path)
-	res, err := sd.Cfg.String(fPath)
+	if sd.Name != "" {
+		path = fmt.Sprintf("%s.%s", sd.Name, path)
+	}
+	res, err := sd.Cfg.String(path)
 	if err != nil {
 		res = alt
 	}
@@ -99,7 +102,10 @@ func (sd *StatsDaemon) Bool(path string) bool {
 }
 
 func (sd *StatsDaemon) BoolOr(path string, alt bool) bool {
-	res, err := sd.Cfg.Bool(fmt.Sprintf("%s.%s", sd.Name, path))
+	if sd.Name != "" {
+		path = fmt.Sprintf("%s.%s", sd.Name, path)
+	}
+	res, err := sd.Cfg.Bool(path)
 	if err != nil {
 		res = alt
 	}
@@ -107,7 +113,10 @@ func (sd *StatsDaemon) BoolOr(path string, alt bool) bool {
 }
 
 func (sd *StatsDaemon) IntOr(path string, alt int) int {
-	res, err := sd.Cfg.Int(fmt.Sprintf("%s.%s", sd.Name, path))
+	if sd.Name != "" {
+		path = fmt.Sprintf("%s.%s", sd.Name, path)
+	}
+	res, err := sd.Cfg.Int(path)
 	if err != nil {
 		res = alt
 	}
@@ -125,8 +134,13 @@ func (sd *StatsDaemon) Run() {
 	sd.LoopChannel()
 }
 
+// RelayMetrics listens for metrics on the QChan.Data channel and sends the metrics to the backends
+func (sd *StatsDaemon) RelayMetrics() {
+
+}
+
 func (sd *StatsDaemon) startUDPListener() {
-	serviceAddress  := sd.StringOr("address", ":8125")
+	serviceAddress := sd.StringOr("address", ":8125")
 	address, _ := net.ResolveUDPAddr("udp", serviceAddress)
 	sd.Log("info", fmt.Sprintf("listening on %s", address))
 	listener, err := net.ListenUDP("udp", address)
@@ -160,14 +174,14 @@ func (sd *StatsDaemon) startTCPListener() {
 
 func (sd *StatsDaemon) ParseTo(conn io.ReadCloser, partialReads bool) {
 	defer conn.Close()
-
 	maxUdpPacketSize := sd.Int("max-udp-packet-size")
 	prefix := sd.String("prefix")
 	postfix := sd.String("postfix")
 	debug := sd.Bool("debug")
 	parser := NewParser(conn, partialReads, debug, maxUdpPacketSize, prefix, postfix)
 	for {
-		p, more := parser.Next()
+		p, more := parser.NextSdPkt()
+		sd.Log("debug", fmt.Sprintf("Received: %v", p))
 		if p != nil {
 			sd.In <- p
 		}
@@ -181,17 +195,18 @@ func (sd *StatsDaemon) ParseTo(conn io.ReadCloser, partialReads bool) {
 func (sd *StatsDaemon) LoopChannel() {
 	tickMs := sd.IntOr("send-metric-ms", 1000)
 	sd.Log("info", fmt.Sprintf("Statsdaemon ticker: %dms", tickMs))
-	ticker := time.NewTicker(time.Duration(tickMs)*time.Millisecond).C
+	ticker := time.NewTicker(time.Duration(tickMs) * time.Millisecond).C
 	for {
 		select {
 		case s := <-sd.In:
-			sd.packetHandler(s)
+			sd.HandlerStatsdPacket(s)
 		case <-ticker:
 			sd.FanOutMetrics()
 		}
 	}
 }
 
+/*
 func (sd *StatsDaemon) monitor() {
 	flushInterval := sd.IntOr("flush-interval-ms", 1000)
 	period := time.Duration(flushInterval) * time.Millisecond
@@ -213,6 +228,7 @@ func (sd *StatsDaemon) monitor() {
 		}
 	}
 }
+*/
 
 func (sd *StatsDaemon) HandlerStatsdPacket(sp *qtypes.StatsdPacket) {
 	if sd.ReceiveCounter != "" {
@@ -222,17 +238,23 @@ func (sd *StatsDaemon) HandlerStatsdPacket(sp *qtypes.StatsdPacket) {
 		}
 		sd.Counters[sd.ReceiveCounter] += 1
 	}
-
+	bid := NewBucketID(sp.Bucket, sp.Dimensions)
+	bkey := bid.ID
+	_, ok := sd.BucketMapping[bkey]
+	if !ok {
+		log.Printf("Include bid '%s' w/ key '%s' in BucketMapping", bid.BucketName, bkey)
+		sd.BucketMapping[bkey] = bid
+	}
 	switch sp.Modifier {
 	case "ms":
-		_, ok := sd.Timers[sp.Bucket]
+		_, ok := sd.Timers[bkey]
 		if !ok {
 			var t Float64Slice
-			sd.Timers[sp.Bucket] = t
+			sd.Timers[bkey] = t
 		}
-		sd.Timers[sp.Bucket] = append(sd.Timers[sp.Bucket], sp.ValFlt)
+		sd.Timers[bkey] = append(sd.Timers[bkey], sp.ValFlt)
 	case "g":
-		gaugeValue, _ := sd.Gauges[sp.Bucket]
+		gaugeValue, _ := sd.Gauges[bkey]
 		if sp.ValStr == "" {
 			gaugeValue = sp.ValFlt
 		} else if sp.ValStr == "+" {
@@ -250,19 +272,19 @@ func (sd *StatsDaemon) HandlerStatsdPacket(sp *qtypes.StatsdPacket) {
 				gaugeValue -= sp.ValFlt
 			}
 		}
-		sd.Gauges[sp.Bucket] = gaugeValue
+		sd.Gauges[bkey] = gaugeValue
 	case "c":
-		_, ok := sd.Counters[sp.Bucket]
+		_, ok := sd.Counters[bkey]
 		if !ok {
-			sd.Counters[sp.Bucket] = 0
+			sd.Counters[bkey] = 0
 		}
-		sd.Counters[sp.Bucket] += sp.ValFlt * float64(1/sp.Sampling)
+		sd.Counters[bkey] += sp.ValFlt * float64(1/sp.Sampling)
 	case "s":
-		_, ok := sd.Sets[sp.Bucket]
+		_, ok := sd.Sets[bkey]
 		if !ok {
-			sd.Sets[sp.Bucket] = make([]string, 0)
+			sd.Sets[bkey] = make([]string, 0)
 		}
-		sd.Sets[sp.Bucket] = append(sd.Sets[sp.Bucket], sp.ValStr)
+		sd.Sets[bkey] = append(sd.Sets[bkey], sp.ValStr)
 	}
 }
 
@@ -327,6 +349,13 @@ func (sd *StatsDaemon) FanOutMetrics() {
 
 }
 
+func (sd *StatsDaemon) ParseLineSdPkt(msg string) (err error) {
+	p := sd.Parser.parseLine([]byte(msg))
+	sp := NewStatsdPacketFromPacket(p)
+	sd.HandlerStatsdPacket(sp)
+	return
+}
+
 func (sd *StatsDaemon) ParseLine(msg string) (err error) {
 	p := sd.Parser.parseLine([]byte(msg))
 	sd.packetHandler(p)
@@ -360,13 +389,19 @@ func (sd *StatsDaemon) FanOutCounters(now time.Time) int64 {
 
 func (sd *StatsDaemon) FanOutGauges(now time.Time) int64 {
 	var num int64
-	dims := map[string]string{}
-	for bucket, currentValue := range sd.Gauges {
-		m := qtypes.NewExt(sd.Name, bucket, qtypes.Gauge, currentValue, dims, now, false)
+	for id, currentValue := range sd.Gauges {
+		bid, ok := sd.BucketMapping[id]
+		if !ok {
+			sd.Log("error", fmt.Sprintf("Could not find BucketID for key '%s'", id))
+			return num
+		}
+		m := qtypes.NewExt(sd.Name, bid.BucketName, qtypes.Gauge, currentValue, bid.Dimensions.Map, now, false)
+		sd.Log("debug", fmt.Sprintf("FanOut: %s", m.ToOpenTSDB()))
 		sd.QChan.Data.Send(m)
 		num++
 		if sd.Bool("delete-gauges") {
-			delete(sd.Gauges, bucket)
+			sd.Log("info", fmt.Sprintf("Delete gauges with id '%s'", id))
+			delete(sd.Gauges, id)
 		}
 	}
 	return num
@@ -426,9 +461,9 @@ func (sd *StatsDaemon) FanOutTimers(now time.Time) int64 {
 
 			var name string
 			if pct.float >= 0 {
-				name = fmt.Sprintf("%s.upper_%s%s", bucketWithoutPostfix, pct.str, postfix )
+				name = fmt.Sprintf("%s.upper_%s%s", bucketWithoutPostfix, pct.str, postfix)
 			} else {
-				name = fmt.Sprintf("%s.lower_%s%s", bucketWithoutPostfix, pct.str[1:], postfix )
+				name = fmt.Sprintf("%s.lower_%s%s", bucketWithoutPostfix, pct.str[1:], postfix)
 			}
 			m := qtypes.NewExt(sd.Name, name, qtypes.Gauge, maxAtThreshold, dims, now, false)
 			sd.sendMetric(m)
@@ -647,4 +682,3 @@ func (sd *StatsDaemon) ProcessTimers(buffer *bytes.Buffer, now int64) int64 {
 	}
 	return num
 }
-

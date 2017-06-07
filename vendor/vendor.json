@@ -226,7 +226,6 @@
 		},
 		{
 			"checksumSHA1": "UmXGieuTJQOzJPspPJTVKKKMiUA=",
-			"origin": "github.com/qnib/statsdaemon/vendor/github.com/docker/go-units",
 			"path": "github.com/docker/go-units",
 			"revision": "0dadbb0345b35ec7ef35e228dabb8de89a65bf52",
 			"revisionTime": "2017-01-27T09:51:30Z"
@@ -376,7 +375,13 @@
 			"revisionTime": "2016-01-10T10:55:54Z"
 		},
 		{
-			"checksumSHA1": "ot6NI+oPpbe2bIPR0AWuQzyVMBU=",
+			"checksumSHA1": "/FvPl4Vn5aW7aq+V2Zbz9jGYFak=",
+			"path": "github.com/qnib/go-httpcheck/lib",
+			"revision": "21ba9d5ee09760c8ee9d54ba945ac44351734492",
+			"revisionTime": "2017-06-06T07:06:32Z"
+		},
+		{
+			"checksumSHA1": "zKqR9LU/lTfB/+9BoHE+ZE7av4I=",
 			"path": "github.com/qnib/qframe-types",
 			"revision": "ad05ce4717e9f002da7ab9dbff67b2a5ec7b424d",
 			"revisionTime": "2017-06-03T09:51:01Z"
@@ -386,6 +391,12 @@
 			"path": "github.com/qnib/qframe-utils",
 			"revision": "32f577044c9bcebb4c9101215b12d496e30c60fb",
 			"revisionTime": "2017-05-21T09:22:01Z"
+		},
+		{
+			"checksumSHA1": "vP9MYHIji8wMQ8URGT5oWn5813c=",
+			"path": "github.com/qnib/statsdaemon/lib",
+			"revision": "ebd4d7cab2e8545d9b7b6dac945f39c7d1effa6c",
+			"revisionTime": "2017-06-03T10:23:17Z"
 		},
 		{
 			"checksumSHA1": "zmC8/3V4ls53DJlNTKDZwPSC/dA=",
@@ -407,7 +418,6 @@
 		},
 		{
 			"checksumSHA1": "Y+HGqEkYM15ir+J93MEaHdyFy0c=",
-			"origin": "github.com/qnib/statsdaemon/vendor/golang.org/x/net/context",
 			"path": "golang.org/x/net/context",
 			"revision": "e4fa1c5465ad6111f206fc92186b8c83d64adbe1",
 			"revisionTime": "2017-06-02T19:04:32Z"

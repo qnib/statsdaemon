@@ -1,9 +1,9 @@
 package statsdaemon
 
 import (
-	"strings"
-	"strconv"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 type Percentiles []*Percentile
